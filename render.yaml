@@ -17,22 +17,43 @@ services:
       - key: ACCESS_KEY
         sync: false
 
-      # ---- viewer configuration (all optional; see README.md) ----
-      - key: SYSTEM_SESSION
+      # ---- viewer configuration (see README.md) ----
+      - key: CLEAR_ALL_SESSIONS
         value: "yes"
-      - key: ALLOW_CRYPTO
+      - key: SYSTEM_SESSION
         value: "no"
+      - key: SESSION_NOTE
+        value: "my-proxies"
       - key: HIDE_BROWSER
         value: "yes"
+      - key: ALLOW_POPUPS
+        value: "no"
+      - key: ALLOW_ADULT
+        value: "no"
+      - key: ALLOW_CRYPTO
+        value: "no"
+      - key: CACHE_LIMIT
+        value: "0"
+      - key: RESET_INTERVAL
+        value: "2h"
       - key: NOTE
         value: "render"
-      - key: RESET_INTERVAL
-        value: "6h"
-      # Uncomment to add proxy sessions:
+
+      # Option A: Static proxy list (5-6 sessions recommended for 512 MB free tier)
+      # - key: BULK_ADD_PROXY_TYPE
+      #   value: "socks5"
+      # - key: BULK_ADD_PROXY_LIST
+      #   value: "1.2.3.4:1080;user;pass|1.2.3.5:1080;user;pass|1.2.3.6:1080;user;pass|1.2.3.7:1080;user;pass|1.2.3.8:1080;user;pass"
+
+      # Option A+: Fetch proxy list on boot (e.g. Webshare download link)
+      # - key: BULK_ADD_PROXY_LIST_URL
+      #   value: "https://proxy.webshare.io/api/v2/proxy/list/download/TOKEN/-/any/username/direct/-/"
+
+      # Option B: External proxy pool (configured at https://dash.9hits.com/pool)
       # - key: EX_PROXY_SESSIONS
-      #   value: "10"
-      # - key: SESSION_NOTE
-      #   value: "pool"
+      #   value: "5"
+      # - key: EX_PROXY_URL
+      #   value: "https://dash.9hits.com/pool/YOUR_POOL_KEY"
 
       # ---- container knobs ----
       - key: SUPERVISOR_DELAY
