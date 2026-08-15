@@ -1,0 +1,52 @@
+# Koyeb App Specification
+# Docs: https://www.koyeb.com/docs/reference/koyeb-yaml
+
+app:
+  name: hits4me-9hits
+services:
+  - name: viewer
+    type: web
+    instance_type: nano
+    regions:
+      - was
+    docker:
+      dockerfile: Dockerfile
+    ports:
+      - port: 10000
+        path: /
+    health_checks:
+      - port: 10000
+        http:
+          path: /health
+          method: GET
+        interval: 30
+        timeout: 5
+        unhealthy_threshold: 3
+        healthy_threshold: 1
+    env:
+      - key: PORT
+        value: "10000"
+      - key: ACCESS_KEY
+        value: ""
+      - key: CLEAR_ALL_SESSIONS
+        value: "yes"
+      - key: SYSTEM_SESSION
+        value: "yes"
+      - key: SESSION_NOTE
+        value: "koyeb-system"
+      - key: NOTE
+        value: "koyeb"
+      - key: HIDE_BROWSER
+        value: "yes"
+      - key: ALLOW_POPUPS
+        value: "no"
+      - key: ALLOW_ADULT
+        value: "no"
+      - key: ALLOW_CRYPTO
+        value: "no"
+      - key: CACHE_LIMIT
+        value: "0"
+      - key: RESET_INTERVAL
+        value: "2h"
+      - key: SUPERVISOR_DELAY
+        value: "10"

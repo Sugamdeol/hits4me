@@ -1,83 +1,171 @@
+---
+title: 9Hits Viewer v6
+emoji: 🌐
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+sdk_version: 4.44.0
+app_file: app.py
+pinned: false
+---
+
 # hits4me
 
 Run the **9Hits Viewer v6** ([9hitste/appv6](https://hub.docker.com/r/9hitste/appv6)) on
-[Render](https://render.com) as a single web service, with a **`/health` endpoint**
-built in so you can monitor it with an uptime ping bot (UptimeRobot, Better Stack,
-Kuma, Upptime, cron + curl, …).
+**100% Free Cloud Hosting Platforms** (**Hugging Face Spaces, Koyeb, Render, Oracle Cloud Always Free, Fly.io, Railway, Zeabur**) as a lightweight service with an integrated **`/health` endpoint** for uptime monitoring.
 
-## Why the wrapper?
+---
 
-The stock image has two problems on Render:
+## Free Multi-Platform Strategy: Free System Sessions on Clean Cloud IPs
 
-1. **Render allocates no TTY** — the viewer renders a text dashboard and exits
-   immediately without a TTY (plain `docker run -d` crash-loops for the same reason).
-2. **Render web services must listen on `0.0.0.0:$PORT`** and pass an HTTP health
-   check — the viewer listens on nothing.
+Rather than relying on shared free proxy lists (which frequently encounter `Auth: Duplicate USER on IP` errors from other 9Hits members), the most reliable method is to run **one system session on each free cloud hosting platform**.
 
-So this repo builds a small image on top of `9hitste/appv6` whose entrypoint:
+Each provider assigns an isolated, clean datacenter outbound IP address:
 
-| File | Job |
-| --- | --- |
-| `start.sh` | Builds the `/nh.sh` flags from env vars, supervises the viewer (auto-restarts it on exit) |
-| `run_pty.py` | Allocates a pseudo-TTY for the viewer, mirrors the dashboard to the logs |
-| `health_server.py` | Tiny stdlib-only HTTP server answering `GET /health` on `0.0.0.0:$PORT` |
+| Platform | Free Tier Type | Resources | Outbound Region / IP | Deployment Method |
+| :--- | :--- | :--- | :--- | :--- |
+| **Hugging Face Spaces** | **100% Free (Gradio SDK)** | **16 GB RAM**, 2 vCPU | US / EU (AWS) | Free Gradio Space (`app.py`) |
+| **Koyeb** | **100% Free (Nano Service)** | 512 MB RAM, 0.1 vCPU | Frankfurt, Washington D.C., Singapore | Docker (`koyeb.yaml`) |
+| **Render** | **100% Free (Web Service)** | 512 MB RAM, 750 hrs/mo | Oregon, Ohio, Frankfurt, Singapore | Docker (`render.yaml`) |
+| **Oracle Cloud Always Free** | **100% Forever Free** | **24 GB RAM**, 4 ARM cores | Your chosen home region | `docker compose up -d` |
+| **Fly.io** | Free Allowance | Up to 3 shared VMs (256 MB) | 30+ Global Regions | `fly.toml` |
+| **Zeabur / Railway** | Free Trial / Starter credits | 512 MB RAM | Global Edge | `zeabur.json` / `railway.json` |
 
-## Deploy on Render
+---
 
-### Option A — Blueprint (recommended)
+## Deployment Guides for 100% Free Platforms
 
-1. Push this repo to GitHub.
-2. Render Dashboard → **New → Blueprint** → connect the repo → **Apply**.
-   `render.yaml` is already set up (Docker runtime, free plan, health check on `/health`).
-3. When prompted, paste your 9Hits **access key** (from
-   [panel.9hits.com/user/profile](https://panel.9hits.com/user/profile)).
-4. Wait for the deploy to go live (first boot downloads the viewer, so it can take
-   a few minutes — the health endpoint is up immediately, so the deploy still succeeds).
+### 1. Hugging Face Spaces (100% FREE — Gradio SDK, 16 GB RAM)
+> 💡 *Note: Docker Spaces require a paid subscription on HF, but **Gradio Spaces are 100% Free** with 16 GB RAM! This repo includes `app.py` to run seamlessly on the free Gradio SDK.*
 
-### Option B — Manual
+1. Go to [huggingface.co/spaces](https://huggingface.co/spaces) → **Create new Space**.
+2. Space Name: `hits4me-viewer` (or any name).
+3. Select **Gradio** SDK (leave hardware as **Free 2 vCPU · 16 GB RAM**).
+4. Connect or duplicate this repository.
+5. In **Settings** → **Variables and secrets**, add:
+   - Secret `ACCESS_KEY`: `<your-9hits-access-key>`
+   - Variable `SYSTEM_SESSION`: `yes`
+   - Variable `CLEAR_ALL_SESSIONS`: `yes`
+   - Variable `SESSION_NOTE`: `hf-system`
+   - Variable `NOTE`: `huggingface`
+   - Variable `RESET_INTERVAL`: `2h`
+6. The Space will build and launch a live status dashboard while running the 9Hits Viewer.
 
-1. Render Dashboard → **New → Web Service** → connect this repo.
-2. Runtime: **Docker** (it auto-detects the `Dockerfile`).
-3. Instance type: Free (or bigger if you run many sessions).
-4. Health check path: `/health`.
-5. Leave the **Docker command** field empty (the image entrypoint does
-   everything; anything you type there is appended to `/nh.sh` as extra flags).
-6. Add environment variables (at minimum `ACCESS_KEY`; see table below).
+---
 
-## Environment variables
+### 2. Koyeb (100% Free Docker Nano Instance)
+1. Go to [app.koyeb.com](https://app.koyeb.com/) → **Create App**.
+2. Select **GitHub** → select `hits4me`.
+3. Choose **Dockerfile** deployment and the **Free (Nano)** instance type.
+4. Set Environment Variables:
+   - `ACCESS_KEY`: `<your-9hits-access-key>`
+   - `SYSTEM_SESSION`: `yes`
+   - `CLEAR_ALL_SESSIONS`: `yes`
+   - `SESSION_NOTE`: `koyeb-system`
+   - `NOTE`: `koyeb`
+   - `RESET_INTERVAL`: `2h`
+   - `PORT`: `10000`
+5. Health Check: Path `/health`, Port `10000`. Click **Deploy**.
 
-All viewer options from the upstream image are available as env vars (any
-arguments you pass as the start command are appended to `/nh.sh` verbatim, too).
+---
 
-| Env var | `/nh.sh` flag | Notes |
-| --- | --- | --- |
-| `ACCESS_KEY` | `--access-key` | **Required.** From [panel.9hits.com/user/profile](https://panel.9hits.com/user/profile) |
-| `SYSTEM_SESSION` | `--system-session` | `yes`/`no` — one session on the machine's IP |
-| `EX_PROXY_SESSIONS` | `--ex-proxy-sessions` | Number of external-proxy sessions |
-| `EX_PROXY_URL` | `--ex-proxy-url` | External proxy pool URL (empty = 9Hits pool) |
-| `BULK_ADD_PROXY_LIST` | `--bulk-add-proxy-list` | `server:port;user;pass\|server2:port;user2;pass2` |
-| `BULK_ADD_PROXY_TYPE` | `--bulk-add-proxy-type` | `http`, `socks4`, `socks5`, `ssh` |
-| `SESSION_NOTE` | `--session-note` | Note applied to created sessions |
-| `NOTE` | `--note` | Note for this machine |
-| `ALLOW_POPUPS` / `ALLOW_ADULT` / `ALLOW_CRYPTO` | `--allow-*` | `yes` or `no` |
-| `HIDE_BROWSER` | `--hide-browser` | `yes` or `no` |
-| `CLEAR_ALL_SESSIONS` | `--clear-all-sessions` | `yes` to wipe sessions on start |
-| `HIDE_COLUMNS` | `--hide-columns` | e.g. `quality,points` |
-| `CACHE_PATH` / `CACHE_LIMIT` | `--cache-path` / `--cache-limit` | e.g. `CACHE_LIMIT=104857600` (100 MB) |
-| `INSTALL_DIR` | `--install-dir` | Default `/etc` |
-| `DEFAULT_DL` | `--default-dl` | Custom viewer download URL |
-| `RE_INSTALL` | `--re-install` | `yes` to force re-download |
-| `RESTART_DELAY` | `--restart-delay` | Viewer's own restart delay, default `5` |
-| `RESET_INTERVAL` | `--reset-interval` | Periodic graceful reset, e.g. `6h`, `30m` |
-| `VNC` / `VNC_PW` / `NO_VNC_PW` / `VNC_PORT` | `--vnc*` | VNC is **not reachable on Render** (only `$PORT` is exposed) — useful for local Docker only |
-| `EXTRA_ARGS` | — | Raw extra flags, e.g. `--hide-columns=quality,points` |
-| `PORT` | — | Health endpoint port. Render sets it automatically (default `10000`) |
-| `SUPERVISOR_DELAY` | — | Seconds between viewer relaunches, default `10` |
+### 3. Render (100% Free Docker Web Service)
+1. In [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** (connect this repo).
+2. Or create **New → Web Service** → Docker runtime → Free tier.
+3. Paste `ACCESS_KEY` when prompted.
+4. Set Environment Variables:
+   ```env
+   ACCESS_KEY=<your-key>
+   SYSTEM_SESSION=yes
+   CLEAR_ALL_SESSIONS=yes
+   SESSION_NOTE=render-system
+   NOTE=render-oregon
+   RESET_INTERVAL=2h
+   ```
+5. *(Optional)* Deploy another free service in a different region (e.g. Frankfurt or Ohio) to get an extra unique IP address.
 
-## The /health endpoint
+---
+
+### 4. Oracle Cloud Always Free (24 GB RAM / 4 CPUs Forever Free)
+Oracle Cloud provides the most generous free tier in the cloud industry (4 ARM vCPUs + 24 GB RAM, plus 2 x86 AMD instances):
+```bash
+git clone https://github.com/Sugamdeol/hits4me.git && cd hits4me
+cp .env.example .env
+
+# Edit .env and set ACCESS_KEY and SYSTEM_SESSION=yes
+nano .env
+
+docker compose up -d
+```
+
+---
+
+### 5. Fly.io
+1. Install `flyctl`: `curl -L https://fly.io/install.sh | sh`
+2. Run `fly launch` in this directory (uses `fly.toml`).
+3. Set your secret: `fly secrets set ACCESS_KEY="<your-access-key>"`.
+4. Deploy: `fly deploy`.
+
+---
+
+## Proxy Setup (Running Multiple Sessions on 1 Machine)
+
+> ⚠️ **IMPORTANT: The 9Hits public proxy pool is CLOSED.**
+> Do not use `EX_PROXY_SESSIONS` without your own custom pool or proxy list.
+
+If you have dedicated or private proxies:
+
+* **Option A — Static Bulk Proxy List (`BULK_ADD_PROXY_LIST`)**
+  ```env
+  BULK_ADD_PROXY_TYPE=socks5
+  BULK_ADD_PROXY_LIST=1.2.3.4:1080;user;pass|1.2.3.5:1080;user;pass|1.2.3.6:1080;user;pass
+  ```
+
+* **Option A+ — Webshare Dynamic Download Link (`BULK_ADD_PROXY_LIST_URL`)**
+  ```env
+  BULK_ADD_PROXY_LIST_URL=https://proxy.webshare.io/api/v2/proxy/list/download/TOKEN/-/any/username/direct/-/
+  ```
+
+* **Option B — Custom Pool (`EX_PROXY_URL`)**
+  Configure at [dash.9hits.com/pool](https://dash.9hits.com/pool):
+  ```env
+  EX_PROXY_SESSIONS=5
+  EX_PROXY_URL=https://dash.9hits.com/pool/YOUR_POOL_KEY
+  ```
+
+---
+
+## Environment Variables Reference
+
+| Env var | `/nh.sh` flag | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `ACCESS_KEY` | `--access-key` | *required* | From [panel.9hits.com/user/profile](https://panel.9hits.com/user/profile) |
+| `SYSTEM_SESSION` | `--system-session` | `no` | `yes`/`no` — runs direct session on instance IP |
+| `CLEAR_ALL_SESSIONS` | `--clear-all-sessions` | `yes` | Wipes stale sessions on boot |
+| `BULK_ADD_PROXY_LIST_URL` | — | *none* | URL to download proxy list on boot |
+| `BULK_ADD_PROXY_LIST` | `--bulk-add-proxy-list` | *none* | Pipe-delimited proxy list (`ip:port;user;pass\|...`) |
+| `BULK_ADD_PROXY_TYPE` | `--bulk-add-proxy-type` | `socks5` | `socks5`, `http`, `socks4`, `ssh` |
+| `EX_PROXY_SESSIONS` | `--ex-proxy-sessions` | *none* | Number of pool sessions (requires `EX_PROXY_URL`) |
+| `EX_PROXY_URL` | `--ex-proxy-url` | *none* | Pool URL from `dash.9hits.com/pool` |
+| `SESSION_NOTE` | `--session-note` | `my-proxies`| Session label in 9Hits panel |
+| `NOTE` | `--note` | `render` | Machine label in 9Hits panel |
+| `HIDE_BROWSER` | `--hide-browser` | `yes` | Run headless |
+| `ALLOW_POPUPS` | `--allow-popups` | `no` | Popups toggle (keep `no` to save RAM/BW) |
+| `ALLOW_ADULT` | `--allow-adult` | `no` | Adult campaigns toggle |
+| `ALLOW_CRYPTO` | `--allow-crypto` | `no` | Crypto mining campaigns toggle |
+| `CACHE_LIMIT` | `--cache-limit` | `0` | Disk cache limit (`0` disables disk cache) |
+| `RESET_INTERVAL` | `--reset-interval` | `2h` | Periodic viewer reset (`2h`, `6h`, `30m`) |
+| `PORT` | — | `10000` | Port for `/health` endpoint |
+| `SUPERVISOR_DELAY` | — | `10` | Seconds before relaunching exited viewer |
+
+---
+
+## Health Monitoring & Uptime Bots
+
+Every instance exposes a lightweight status endpoint:
 
 ```
-GET https://<your-service>.onrender.com/health
+GET https://<your-service>/health
 ```
 
 ```json
@@ -89,59 +177,17 @@ GET https://<your-service>.onrender.com/health
   "supervisor_running": true,
   "viewer_pid": 42,
   "restarts": 0,
-  "uptime_seconds": 5123
+  "uptime_seconds": 3600
 }
 ```
 
-* `/health`, `/healthz`, `/ping` and `/` all answer (HEAD too).
-* `status` is `ok` while the viewer runs, `restarting` while it's between
-  relaunches, `error` if the supervisor is gone (HTTP 503 — Render restarts the
-  container, which is the right recovery).
-* It answers 200 as soon as the container boots, so deploys succeed even while
-  the viewer is still downloading.
+Point any free uptime monitor (**UptimeRobot, Better Stack, Cron-job.org, Kuma**) to ping `https://<your-app>/health` every **5 to 10 minutes** to keep free-tier instances active and prevent sleep timeouts.
 
-## Uptime ping bot setup
-
-1. **Monitor URL:** `https://<your-service>.onrender.com/health`
-2. **Interval: 14 minutes or less.** Render's free tier spins down a web
-   service after ~15 minutes without inbound traffic — your pings keep it
-   awake (Render's own health checks don't count as traffic). 5–10 minute
-   intervals are typical. Free tier also has a 750 hour/month pool, so a
-   24/7 pinged service may hit that limit — a paid plan lifts both limits.
-3. **Bonus — alert when the viewer itself crashes:** use a *keyword* monitor
-   (UptimeRobot: "Keyword" monitor type; Better Stack: keyword check; Kuma:
-   HTTP monitor with a "keyword" condition) for the string `"status": "ok"`.
-   If the viewer crash-loops while the container stays up, the keyword
-   disappears and you get paged even though the HTTP status is still 200.
-
-## Local testing
-
-```bash
-# one-off
-docker build -t hits4me-9hits .
-docker run -d --shm-size=2g -p 10000:10000 \
-  -e ACCESS_KEY=<your-key> -e SYSTEM_SESSION=yes \
-  hits4me-9hits
-curl http://localhost:10000/health   # -> {"status": "ok", ...}
-docker logs -f <container-id>        # live dashboard (run_pty allocates the TTY, so plain -d works)
-
-# or with compose
-cp .env.example .env   # set ACCESS_KEY
-docker compose up --build
-```
+---
 
 ## Troubleshooting
 
-* **Dashboard says `User not found!`** — `ACCESS_KEY` is wrong or empty. Fix the
-  env var on Render (Environment tab) and redeploy.
-* **Viewer crash-looping** — check `restarts` in the `/health` JSON and the logs.
-  Common causes: wrong access key, too many sessions for the instance size
-  (Render free = 512 MB RAM / 0.1 CPU — start with 1 system session; paid plans
-  handle more), or `/dev/shm` limits (Render doesn't expose `--shm-size`; if
-  Chrome dies with shm errors, reduce sessions or move to a dedicated VPS).
-* **`/health` is 503** — the supervisor died; Render restarts the service
-  automatically.
-* **Service spins down overnight** — your uptime bot interval is ≥15 min, or it
-  stopped pinging.
-* **Render account/TOS** — 9Hits generates automated web traffic; make sure
-  that's acceptable under your VPS/host provider's terms before scaling up.
+* **`Auth: Duplicate USER on IP [x.x.x.x]`** — Another 9Hits user is already using that public/shared proxy IP. Switch to a system session on a dedicated cloud provider, refresh your Webshare list, or use private proxies.
+* **`Auth: Duplicate SESSION on IP [x.x.x.x]`** — Multiple sessions from your account on the same IP. Ensure `SYSTEM_SESSION=no` when using proxies, or enable `CLEAR_ALL_SESSIONS=yes` to clear lingering connections.
+* **`Pool error: The public pool is closed!`** — Set `EX_PROXY_SESSIONS=0` (or unset it) and use `BULK_ADD_PROXY_LIST` / `BULK_ADD_PROXY_LIST_URL`, or provide your own custom pool via `EX_PROXY_URL`.
+* **`User not found!`** — `ACCESS_KEY` is incorrect or missing.

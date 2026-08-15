@@ -21,6 +21,23 @@ export PORT
 
 log() { printf '[start] %s\n' "$*"; }
 
+# ------------------------------------------------ fetch proxy list if requested
+if [ -n "${BULK_ADD_PROXY_LIST_URL:-}" ] && [ -z "${BULK_ADD_PROXY_LIST:-}" ]; then
+  fetch_err_file=$(mktemp 2>/dev/null || echo "/tmp/fetch_proxy_err.$$")
+  if fetch_out=$(python3 "$SCRIPT_DIR/fetch_proxy_list.py" "$BULK_ADD_PROXY_LIST_URL" 2>"$fetch_err_file"); then
+    BULK_ADD_PROXY_LIST="$fetch_out"
+    BULK_ADD_PROXY_TYPE="${BULK_ADD_PROXY_TYPE:-socks5}"
+    proxy_count=$(awk -F'|' '{print NF}' <<< "$BULK_ADD_PROXY_LIST")
+    log "fetched $proxy_count proxies from BULK_ADD_PROXY_LIST_URL"
+  else
+    err_msg=$(cat "$fetch_err_file" 2>/dev/null || true)
+    [ -z "$err_msg" ] && err_msg="$fetch_out"
+    [ -z "$err_msg" ] && err_msg="unknown error"
+    log "WARNING: failed to fetch proxy list from BULK_ADD_PROXY_LIST_URL ($err_msg)"
+  fi
+  rm -f "$fetch_err_file"
+fi
+
 # ---------------------------------------------------------------- arguments
 NH_ARGS=()
 kv()   { [ -n "${2:-}" ] && NH_ARGS+=("--$1=$2"); }
@@ -67,6 +84,36 @@ NH_ARGS+=("$@")
 
 if [ -z "${ACCESS_KEY:-}" ]; then
   log "WARNING: ACCESS_KEY is not set - the viewer will report 'User not found!'"
+fi
+
+# ---------------------------------------------------------- pool-closed check
+if [[ "${EX_PROXY_SESSIONS:-0}" =~ ^[1-9][0-9]*$ ]] && [ -z "${EX_PROXY_URL:-}" ] && [ -z "${BULK_ADD_PROXY_LIST:-}" ]; then
+  log "WARNING: EX_PROXY_SESSIONS is set (${EX_PROXY_SESSIONS}) but EX_PROXY_URL and BULK_ADD_PROXY_LIST are empty. The 9Hits public pool is CLOSED! Every pool session will fail with 'Pool error: The public pool is closed!'. Configure your own pool at https://dash.9hits.com/pool (EX_PROXY_URL) or use BULK_ADD_PROXY_LIST / BULK_ADD_PROXY_LIST_URL."
+fi
+
+# ----------------------------------------------------------- RAM sanity check
+est_sessions=0
+if [[ "${EX_PROXY_SESSIONS:-0}" =~ ^[1-9][0-9]*$ ]]; then
+  est_sessions=$((est_sessions + EX_PROXY_SESSIONS))
+fi
+
+if [ -n "${BULK_ADD_PROXY_LIST:-}" ]; then
+  bulk_proxies=$(awk -F'|' '{print NF}' <<< "$BULK_ADD_PROXY_LIST")
+  est_sessions=$((est_sessions + bulk_proxies))
+fi
+
+case "${SYSTEM_SESSION:-}" in
+  1|yes|true|on) est_sessions=$((est_sessions + 1)) ;;
+esac
+
+mem_total_mb=0
+if [ -f /proc/meminfo ]; then
+  mem_total_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+  mem_total_mb=$((mem_total_kb / 1024))
+fi
+
+if [ "$mem_total_mb" -gt 0 ] && [ "$mem_total_mb" -lt 1024 ] && [ "$est_sessions" -ge 4 ]; then
+  log "WARNING: detected ${mem_total_mb} MB RAM with ~${est_sessions} estimated sessions. Instances with < 1024 MB RAM (e.g. Render free tier 512 MB) may experience OOM kills with 4+ sessions. Consider lowering the session count (5-6 is recommended maximum) or using a bigger instance."
 fi
 
 # ------------------------------------------------------- redacted arg echo

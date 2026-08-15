@@ -1,0 +1,47 @@
+# fly.toml app configuration file for 9Hits Viewer
+# Docs: https://fly.io/docs/reference/configuration/
+
+app = "hits4me-9hits"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "10000"
+  CLEAR_ALL_SESSIONS = "yes"
+  SYSTEM_SESSION = "yes"
+  SESSION_NOTE = "fly-system"
+  NOTE = "fly"
+  HIDE_BROWSER = "yes"
+  ALLOW_POPUPS = "no"
+  ALLOW_ADULT = "no"
+  ALLOW_CRYPTO = "no"
+  CACHE_LIMIT = "0"
+  RESET_INTERVAL = "2h"
+  SUPERVISOR_DELAY = "10"
+
+[http_service]
+  internal_port = 10000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 50
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
