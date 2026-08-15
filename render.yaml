@@ -21,7 +21,7 @@ services:
       - key: CLEAR_ALL_SESSIONS
         value: "yes"
       - key: SYSTEM_SESSION
-        value: "no"
+        value: "yes"
       - key: SESSION_NOTE
         value: "my-proxies"
       - key: HIDE_BROWSER
@@ -29,9 +29,9 @@ services:
       - key: ALLOW_POPUPS
         value: "no"
       - key: ALLOW_ADULT
-        value: "no"
+        value: "yes"
       - key: ALLOW_CRYPTO
-        value: "no"
+        value: "yes"
       - key: CACHE_LIMIT
         value: "0"
       - key: RESET_INTERVAL
