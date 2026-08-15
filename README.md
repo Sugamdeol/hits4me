@@ -3,77 +3,61 @@ title: 9Hits Viewer v6
 emoji: 🌐
 colorFrom: blue
 colorTo: indigo
-sdk: docker
-app_port: 10000
+sdk: gradio
+sdk_version: 4.44.0
+app_file: app.py
 pinned: false
 ---
 
 # hits4me
 
 Run the **9Hits Viewer v6** ([9hitste/appv6](https://hub.docker.com/r/9hitste/appv6)) on
-any cloud container platform (**Render, Koyeb, Hugging Face Spaces, Fly.io, Railway, Zeabur, Oracle Cloud, VPS**) as a lightweight service with an integrated **`/health` endpoint** for uptime monitoring.
+**100% Free Cloud Hosting Platforms** (**Hugging Face Spaces, Koyeb, Render, Oracle Cloud Always Free, Fly.io, Railway, Zeabur**) as a lightweight service with an integrated **`/health` endpoint** for uptime monitoring.
 
 ---
 
-## Why the wrapper?
+## Free Multi-Platform Strategy: Free System Sessions on Clean Cloud IPs
 
-1. **Headless TTY Emulation** — 9Hits Viewer requires a pseudo-TTY dashboard and exits immediately in background container environments without one. `run_pty.py` wraps the viewer in a PTY so it stays running anywhere.
-2. **HTTP Health Server** — Most free hosting platforms require an HTTP service on `0.0.0.0:$PORT` to pass deployment health checks. `health_server.py` answers `GET /health` immediately on boot.
-3. **Automated Supervision** — Automatically relaunches the viewer if it crashes or reaches its `--reset-interval`.
-4. **Proxy & System Session Flexibility** — Supports static proxy lists, dynamic Webshare download URLs, custom 9Hits pools, and single-click zero-proxy **system sessions** on distinct cloud IPs.
+Rather than relying on shared free proxy lists (which frequently encounter `Auth: Duplicate USER on IP` errors from other 9Hits members), the most reliable method is to run **one system session on each free cloud hosting platform**.
 
-| File | Job |
-| --- | --- |
-| `start.sh` | Builds `/nh.sh` flags from env vars, supervises viewer lifecycle, redacts secrets |
-| `run_pty.py` | Allocates pseudo-TTY for the viewer, mirrors dashboard to stdout |
-| `health_server.py` | Pure stdlib HTTP server on `0.0.0.0:$PORT` (`/health`, `/healthz`, `/ping`) |
-| `fetch_proxy_list.py` | Auto-downloads and parses proxy lists on boot from `BULK_ADD_PROXY_LIST_URL` |
-| `webshare_to_9hits.py` | CLI converter for Webshare list files to 9Hits format |
+Each provider assigns an isolated, clean datacenter outbound IP address:
 
----
-
-## Multi-Platform Strategy: Free System Sessions with Different IPs
-
-Instead of dealing with shared/overloaded free proxy lists (which often hit `Auth: Duplicate USER on IP`), you can run **independent system sessions across multiple free cloud hosting platforms**. 
-
-Each platform assigns a **completely different, dedicated outbound IP address** from its datacenter network:
-
-| Platform | Free Tier Specifications | Default Region / Egress IP | Configuration |
-| :--- | :--- | :--- | :--- |
-| **Hugging Face Spaces** | **16 GB RAM**, 2 vCPU (24/7 Always On) | US / EU (AWS egress) | Native Docker Space |
-| **Koyeb** | **512 MB RAM**, 0.1 vCPU (Free Nano) | Frankfurt, Washington D.C., Singapore | `koyeb.yaml` |
-| **Render** | **512 MB RAM**, 750 free hrs/mo | Oregon, Ohio, Frankfurt, Singapore | `render.yaml` |
-| **Fly.io** | Up to 3 shared VMs (256 MB RAM) | 30+ Global Edge Regions | `fly.toml` |
-| **Zeabur** | Free trial / Starter credits | Global Edge | `zeabur.json` |
-| **Railway** | Starter / Trial credits | US West / EU | `railway.json` |
-| **Oracle Cloud Free** | **24 GB RAM**, 4 ARM cores (Always Free) | Your Home Region | `docker-compose.yml` |
+| Platform | Free Tier Type | Resources | Outbound Region / IP | Deployment Method |
+| :--- | :--- | :--- | :--- | :--- |
+| **Hugging Face Spaces** | **100% Free (Gradio SDK)** | **16 GB RAM**, 2 vCPU | US / EU (AWS) | Free Gradio Space (`app.py`) |
+| **Koyeb** | **100% Free (Nano Service)** | 512 MB RAM, 0.1 vCPU | Frankfurt, Washington D.C., Singapore | Docker (`koyeb.yaml`) |
+| **Render** | **100% Free (Web Service)** | 512 MB RAM, 750 hrs/mo | Oregon, Ohio, Frankfurt, Singapore | Docker (`render.yaml`) |
+| **Oracle Cloud Always Free** | **100% Forever Free** | **24 GB RAM**, 4 ARM cores | Your chosen home region | `docker compose up -d` |
+| **Fly.io** | Free Allowance | Up to 3 shared VMs (256 MB) | 30+ Global Regions | `fly.toml` |
+| **Zeabur / Railway** | Free Trial / Starter credits | 512 MB RAM | Global Edge | `zeabur.json` / `railway.json` |
 
 ---
 
-## Deployment Guides
+## Deployment Guides for 100% Free Platforms
 
-### 1. Hugging Face Spaces (Generous 16 GB RAM — Best Free Tier)
-1. Go to [Hugging Face Spaces](https://huggingface.co/spaces) → **Create new Space**.
-2. Space Name: `hits4me` (or any name).
-3. Select **Docker** → **Blank**.
-4. Visibility: **Public** or **Private**.
-5. Once created, push this repository or connect it to your GitHub repo.
-6. In **Settings** → **Variables and secrets**, add:
+### 1. Hugging Face Spaces (100% FREE — Gradio SDK, 16 GB RAM)
+> 💡 *Note: Docker Spaces require a paid subscription on HF, but **Gradio Spaces are 100% Free** with 16 GB RAM! This repo includes `app.py` to run seamlessly on the free Gradio SDK.*
+
+1. Go to [huggingface.co/spaces](https://huggingface.co/spaces) → **Create new Space**.
+2. Space Name: `hits4me-viewer` (or any name).
+3. Select **Gradio** SDK (leave hardware as **Free 2 vCPU · 16 GB RAM**).
+4. Connect or duplicate this repository.
+5. In **Settings** → **Variables and secrets**, add:
    - Secret `ACCESS_KEY`: `<your-9hits-access-key>`
    - Variable `SYSTEM_SESSION`: `yes`
    - Variable `CLEAR_ALL_SESSIONS`: `yes`
    - Variable `SESSION_NOTE`: `hf-system`
    - Variable `NOTE`: `huggingface`
    - Variable `RESET_INTERVAL`: `2h`
+6. The Space will build and launch a live status dashboard while running the 9Hits Viewer.
 
 ---
 
-### 2. Koyeb (1 Free Always-On Nano Service)
-1. Go to [Koyeb Dashboard](https://app.koyeb.com/) → **Create App**.
+### 2. Koyeb (100% Free Docker Nano Instance)
+1. Go to [app.koyeb.com](https://app.koyeb.com/) → **Create App**.
 2. Select **GitHub** → select `hits4me`.
-3. Deployment method: **Dockerfile**.
-4. Service Type: **Web Service**, Instance Type: **Free (Nano)**.
-5. In **Environment Variables**:
+3. Choose **Dockerfile** deployment and the **Free (Nano)** instance type.
+4. Set Environment Variables:
    - `ACCESS_KEY`: `<your-9hits-access-key>`
    - `SYSTEM_SESSION`: `yes`
    - `CLEAR_ALL_SESSIONS`: `yes`
@@ -81,15 +65,15 @@ Each platform assigns a **completely different, dedicated outbound IP address** 
    - `NOTE`: `koyeb`
    - `RESET_INTERVAL`: `2h`
    - `PORT`: `10000`
-6. Health Check: Path `/health`, Port `10000`. Click **Deploy**.
+5. Health Check: Path `/health`, Port `10000`. Click **Deploy**.
 
 ---
 
-### 3. Render (Blueprint or Web Service)
-1. Go to [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** (connect this repo).
-2. Or create **New → Web Service** → Docker runtime → Free instance.
+### 3. Render (100% Free Docker Web Service)
+1. In [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** (connect this repo).
+2. Or create **New → Web Service** → Docker runtime → Free tier.
 3. Paste `ACCESS_KEY` when prompted.
-4. Environment settings for a System Session:
+4. Set Environment Variables:
    ```env
    ACCESS_KEY=<your-key>
    SYSTEM_SESSION=yes
@@ -98,41 +82,38 @@ Each platform assigns a **completely different, dedicated outbound IP address** 
    NOTE=render-oregon
    RESET_INTERVAL=2h
    ```
-5. *(Optional)* Create another service in a different region (e.g. Frankfurt / Ohio) for an additional distinct IP.
+5. *(Optional)* Deploy another free service in a different region (e.g. Frankfurt or Ohio) to get an extra unique IP address.
 
 ---
 
-### 4. Fly.io
-1. Install the `flyctl` CLI: `curl -L https://fly.io/install.sh | sh`
-2. Run `fly launch` in the repository directory (it will detect `fly.toml` and `Dockerfile`).
-3. Set your secret: `fly secrets set ACCESS_KEY="<your-9hits-access-key>"`
-4. Deploy: `fly deploy`
-
----
-
-### 5. Oracle Cloud / VPS / Local Docker
-For persistent 24/7 self-hosted instances:
+### 4. Oracle Cloud Always Free (24 GB RAM / 4 CPUs Forever Free)
+Oracle Cloud provides the most generous free tier in the cloud industry (4 ARM vCPUs + 24 GB RAM, plus 2 x86 AMD instances):
 ```bash
-# Clone and configure
-git clone https://github.com/Sugamdeol/hits4me.git
-cd hits4me
+git clone https://github.com/Sugamdeol/hits4me.git && cd hits4me
 cp .env.example .env
 
-# Edit .env and fill in ACCESS_KEY + SYSTEM_SESSION=yes
+# Edit .env and set ACCESS_KEY and SYSTEM_SESSION=yes
 nano .env
 
-# Launch
 docker compose up -d
 ```
 
 ---
 
-## Proxy Configuration (Alternative Multi-Session on 1 Container)
+### 5. Fly.io
+1. Install `flyctl`: `curl -L https://fly.io/install.sh | sh`
+2. Run `fly launch` in this directory (uses `fly.toml`).
+3. Set your secret: `fly secrets set ACCESS_KEY="<your-access-key>"`.
+4. Deploy: `fly deploy`.
+
+---
+
+## Proxy Setup (Running Multiple Sessions on 1 Machine)
 
 > ⚠️ **IMPORTANT: The 9Hits public proxy pool is CLOSED.**
 > Do not use `EX_PROXY_SESSIONS` without your own custom pool or proxy list.
 
-If you prefer running multiple sessions inside a single container using proxies:
+If you have dedicated or private proxies:
 
 * **Option A — Static Bulk Proxy List (`BULK_ADD_PROXY_LIST`)**
   ```env
@@ -146,7 +127,7 @@ If you prefer running multiple sessions inside a single container using proxies:
   ```
 
 * **Option B — Custom Pool (`EX_PROXY_URL`)**
-  Create your pool at [dash.9hits.com/pool](https://dash.9hits.com/pool) and set:
+  Configure at [dash.9hits.com/pool](https://dash.9hits.com/pool):
   ```env
   EX_PROXY_SESSIONS=5
   EX_PROXY_URL=https://dash.9hits.com/pool/YOUR_POOL_KEY
