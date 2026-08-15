@@ -239,11 +239,15 @@ docker compose up --build
   public pool. Fix: set `EX_PROXY_SESSIONS=0` (or leave unset) and use `BULK_ADD_PROXY_LIST`
   or `BULK_ADD_PROXY_LIST_URL` (Option A / A+), or set `EX_PROXY_URL` to your own pool
   created at [dash.9hits.com/pool](https://dash.9hits.com/pool) (Option B).
-* **`Auth: Duplicate SESSION on IP`** — Occurs when 9Hits detects multiple sessions on
+* **`Auth: Duplicate USER on IP [x.x.x.x]`** — Occurs when **another 9Hits user** (a different account) is actively running 9Hits on that exact same proxy IP. Because Webshare free tier IPs are shared across many users, other 9Hits traffic exchange members are often using those same free IPs.
+  * **Fixes:**
+    1. Try the remaining proxy IPs in your 10-proxy Webshare list (or test which ones authenticate).
+    2. In Webshare dashboard (**Proxy** → **List**), refresh/rotate your free proxy list to get a new set of IPs.
+    3. Upgrade to private/semi-dedicated proxies on Webshare or another provider so you have exclusive ownership of the proxy IP.
+* **`Auth: Duplicate SESSION on IP`** — Occurs when 9Hits detects multiple sessions from **your own account** on
   the same IP address. On Render, the host egress IP is shared and stale sessions linger.
   Fix: set `SYSTEM_SESSION=no` and `CLEAR_ALL_SESSIONS=yes`. If using external proxies,
-  ensure each proxy IP in your list is unique and remove any shared proxy IP that collides
-  with another user.
+  ensure each proxy IP in your list is unique and remove any duplicate proxy IP.
 * **Dashboard says `User not found!`** — `ACCESS_KEY` is wrong or empty. Fix the
   env var on Render (Environment tab) and redeploy.
 * **Viewer crash-looping** — check `restarts` in the `/health` JSON and the logs.
