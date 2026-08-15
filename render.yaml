@@ -1,0 +1,43 @@
+# Render Blueprint - deploys the 9Hits viewer + /health endpoint as one web
+# service. Use it via: Render Dashboard -> New -> Blueprint -> connect this
+# repo. ACCESS_KEY is prompted as a secret during the deploy.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: 9hits-viewer
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      # Prompted as a secret when the blueprint is applied.
+      # Get it at https://panel.9hits.com/user/profile
+      - key: ACCESS_KEY
+        sync: false
+
+      # ---- viewer configuration (all optional; see README.md) ----
+      - key: SYSTEM_SESSION
+        value: "yes"
+      - key: ALLOW_CRYPTO
+        value: "no"
+      - key: HIDE_BROWSER
+        value: "yes"
+      - key: NOTE
+        value: "render"
+      - key: RESET_INTERVAL
+        value: "6h"
+      # Uncomment to add proxy sessions:
+      # - key: EX_PROXY_SESSIONS
+      #   value: "10"
+      # - key: SESSION_NOTE
+      #   value: "pool"
+
+      # ---- container knobs ----
+      - key: SUPERVISOR_DELAY
+        value: "10"
+      # Render sets PORT automatically (default 10000); override only if you
+      # change the service port in the dashboard.
+      - key: PORT
+        value: "10000"

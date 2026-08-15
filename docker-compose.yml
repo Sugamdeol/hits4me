@@ -1,0 +1,20 @@
+# Local testing (same image Render builds):
+#   1. copy .env.example to .env and set ACCESS_KEY
+#   2. docker compose up --build
+#   3. curl http://localhost:10000/health
+services:
+  9hits:
+    build: .
+    shm_size: 2g
+    ports:
+      - "10000:10000"
+    environment:
+      PORT: "10000"
+      ACCESS_KEY: "${ACCESS_KEY:-}"
+      SYSTEM_SESSION: "${SYSTEM_SESSION:-yes}"
+      ALLOW_CRYPTO: "${ALLOW_CRYPTO:-no}"
+      HIDE_BROWSER: "${HIDE_BROWSER:-yes}"
+      NOTE: "${NOTE:-local}"
+      RESET_INTERVAL: "${RESET_INTERVAL:-6h}"
+      SUPERVISOR_DELAY: "10"
+    restart: unless-stopped
