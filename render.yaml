@@ -82,7 +82,7 @@ services:
   # If you're on a paid plan you can change `type: background` to `type: web`
   # and set `healthCheckPath: /`.
   # ---------------------------------------------------------------------------
-  - type: background
+  - type: web
     name: feelingsurf-viewer
     runtime: image
     plan: free
