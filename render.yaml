@@ -7,11 +7,11 @@ services:
     plan: free
     healthCheckPath: /health
     envVars:
-      # Render prompts for both secrets during the first Blueprint deploy.
+      # Render prompts for the 9Hits key; FeelingSurf is preconfigured below.
       - key: ACCESS_KEY
         sync: false
       - key: ACCESS_TOKEN
-        sync: false
+        value: "27f77ef00e768cdbdc7352f3456e35b5"
 
       - key: PORT
         value: "10000"

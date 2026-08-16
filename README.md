@@ -76,7 +76,7 @@ Each provider assigns an isolated, clean datacenter outbound IP address:
 ### 3. Render (100% Free Docker Web Service)
 1. In [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** (connect this repo).
 2. Or create **New → Web Service** → Docker runtime → Free tier.
-3. Paste both `ACCESS_KEY` and `ACCESS_TOKEN` when prompted.
+3. Paste `ACCESS_KEY` when prompted. `ACCESS_TOKEN` is preconfigured in `render.yaml`.
 4. Set Environment Variables:
    ```env
    ACCESS_KEY=<your-key>
@@ -161,7 +161,7 @@ The combined repository `Dockerfile` is used on cloud platforms. Configure both 
 | Platform | Deployment | Notes |
 | :--- | :--- | :--- |
 | **Oracle Cloud Always Free** | use `docker compose up -d` | One combined service; the 24 GB tier has ample memory. |
-| **Render** | Blueprint (`render.yaml`) deploys one **hits4me-viewers** web service containing both viewers. Both secrets are prompted. | The free 512 MB plan is unlikely to have enough RAM; use a plan with at least 4 GB. |
+| **Render** | Blueprint (`render.yaml`) deploys one **hits4me-viewers** web service containing both viewers. `ACCESS_KEY` is prompted and `ACCESS_TOKEN` is preconfigured. | The free 512 MB plan is unlikely to have enough RAM; use a plan with at least 4 GB. |
 | **Koyeb** | Deploy this repository Dockerfile and set both secrets. | Uses `koyeb.yaml`; one service runs both viewers. |
 | **Fly.io** | Deploy this repository Dockerfile and set both secrets. | Uses `fly.toml`; one service runs both viewers. |
 | **Railway** | Deploy this repository Dockerfile and set both secrets. | Uses `railway.json`; one service runs both viewers. |
