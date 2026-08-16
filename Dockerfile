@@ -82,11 +82,16 @@ WORKDIR /
 COPY start.sh        /start.sh
 COPY run_pty.py      /run_pty.py
 COPY health_server.py /health_server.py
+COPY memguard.py     /memguard.py
 COPY fetch_proxy_list.py /fetch_proxy_list.py
 COPY feelingsurf-run.sh /feelingsurf-run.sh
 
-RUN chmod +x /start.sh /run_pty.py /health_server.py /fetch_proxy_list.py /feelingsurf-run.sh
+RUN chmod +x /start.sh /run_pty.py /health_server.py /memguard.py /fetch_proxy_list.py /feelingsurf-run.sh
 
+# 512MB dual-viewer survival (see start.sh): LOW_MEMORY shrinks both
+# Chromiums, memguard.py restarts the heaviest viewer before the platform can
+# OOM the container, and auto mode alternates the viewers when they still
+# don't fit simultaneously (Render free = 512 MB).
 ENV PORT=10000 \
     FEELINGSURF_PORT=3000 \
     FEELINGSURF_ENABLED=yes \
@@ -95,7 +100,10 @@ ENV PORT=10000 \
     NH_DISPLAY=:99 \
     INIT_TIMEOUT=300 \
     NH_WATCHDOG=yes \
-    NH_WATCHDOG_STUCK=600
+    NH_WATCHDOG_STUCK=600 \
+    DUAL_VIEWER_MODE=auto \
+    TIME_SLICE=1500 \
+    LOW_MEMORY=auto
 
 EXPOSE 10000 3000 5901
 
@@ -103,7 +111,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD wget -q --spider "http://localhost:${PORT}/health" || exit 1
 
 # /start.sh launches BOTH viewers (supervised + auto-restarted) plus the
-# Xvfb display for 9Hits and the combined /health HTTP server.
+# Xvfb display for 9Hits, the combined /health HTTP server, and memguard.py
+# (memory guardian / time-slice scheduler for 512 MB plans).
 # Extra docker/start-command arguments are forwarded to the nhviewer init pass.
 ENTRYPOINT ["/start.sh"]
 CMD []

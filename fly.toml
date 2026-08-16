@@ -9,9 +9,11 @@ primary_region = "iad"
 
 [env]
   PORT = "10000"
-  # 4 GB RAM configured below -> both viewers fit, so 9Hits stays on.
+  # 4 GB RAM configured below -> both viewers fit concurrently.
   NINEHITS_ENABLED = "yes"
   FEELINGSURF_ENABLED = "yes"
+  DUAL_VIEWER_MODE = "concurrent"   # 4 GB: no need for time-slicing
+  LOW_MEMORY = "auto"               # auto: flags off on a 4 GB box
   CLEAR_ALL_SESSIONS = "yes"
   SYSTEM_SESSION = "yes"
   SESSION_NOTE = "fly-system"
