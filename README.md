@@ -96,10 +96,14 @@ Oracle Cloud provides the most generous free tier in the cloud industry (4 ARM v
 git clone https://github.com/Sugamdeol/hits4me.git && cd hits4me
 cp .env.example .env
 
-# Edit .env and set ACCESS_KEY and SYSTEM_SESSION=yes
+# Edit .env and set ACCESS_KEY (9Hits) AND/OR ACCESS_TOKEN (FeelingSurf)
 nano .env
 
+# Start 9Hits only (default):
 docker compose up -d
+
+# Or start BOTH viewers:
+docker compose --profile feelingsurf up -d
 ```
 
 ---
@@ -161,7 +165,7 @@ The **official image already works on free platforms** — no custom Dockerfile 
 | Platform | Deployment | Notes |
 | :--- | :--- | :--- |
 | **Oracle Cloud Always Free** | use `docker compose --profile feelingsurf up -d` (same `docker-compose.yml`) | Two services, ~3 GB RAM each — well within the 24 GB free tier. |
-| **Render** | `New → Web Service → Deploy an existing image → feelingsurf/viewer:stable`. Set env `access_token`. Health check: `GET /` on port `3000`. | `feelsurf-render.yaml` is included as a Blueprint if you prefer. |
+| **Render** | Blueprint (`render.yaml`) auto-deploys both: **9hits-viewer** (web, port `10000`) and **feelingsurf-viewer** (background, port `3000`). Free plan fits both in one account: 1 web + 1 background slot. Both `ACCESS_KEY` and `access_token` are prompted as secrets during deploy. | Plug-and-play via `render.yaml` — no extra config needed. |
 | **Koyeb** | `Create App → Docker Image → feelingsurf/viewer:stable`. Set env `access_token`. Ports/HTTP check: `port 3000`. | `feelsurf-koyeb.yaml` is included. |
 | **Fly.io** | `fly launch --image feelingsurf/viewer:stable`. Set secret: `fly secrets set access_token=...`. Internal port `3000`. | `feelsurf-fly.toml` is included. |
 | **Railway** | Create a service from public image `feelingsurf/viewer:stable`. Variables: `access_token`. | `feelsurf-railway.json` is included. |

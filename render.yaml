@@ -1,10 +1,20 @@
-# Render Blueprint - deploys the 9Hits viewer + /health endpoint as one web
-# service. Use it via: Render Dashboard -> New -> Blueprint -> connect this
-# repo. ACCESS_KEY is prompted as a secret during the deploy.
+# Render Blueprint - deploys BOTH the 9Hits viewer AND the FeelingSurf viewer
+# as separate services on Render via a single blueprint.
+#
+# When this PR merges to main, Render auto-deploys:
+#   1. 9hits-viewer  (web)     - the managed 9Hits viewer on port 10000
+#   2. feelingsurf-viewer (bg) - the auto-surf FeelingSurf viewer (port 3000)
+#
+# Access keys are prompted as secrets during the first deploy.
+#   ACCESS_KEY  -> https://panel.9hits.com/user/profile
+#   access_token -> https://www.feelingsurf.fr/member (Profile -> API token)
 #
 # Docs: https://render.com/docs/blueprint-spec
 
 services:
+  # ---------------------------------------------------------------------------
+  # 9Hits Viewer (web) — runs the full 9Hits viewer with proxy/pool support
+  # ---------------------------------------------------------------------------
   - type: web
     name: 9hits-viewer
     runtime: docker
@@ -13,7 +23,6 @@ services:
     healthCheckPath: /health
     envVars:
       # Prompted as a secret when the blueprint is applied.
-      # Get it at https://panel.9hits.com/user/profile
       - key: ACCESS_KEY
         sync: false
 
@@ -43,7 +52,7 @@ services:
       # - key: BULK_ADD_PROXY_TYPE
       #   value: "socks5"
       # - key: BULK_ADD_PROXY_LIST
-      #   value: "1.2.3.4:1080;user;pass|1.2.3.5:1080;user;pass|1.2.3.6:1080;user;pass|1.2.3.7:1080;user;pass|1.2.3.8:1080;user;pass"
+      #   value: "1.2.3.4:1080;user;pass|1.2.3.5:1080;user;pass|..."
 
       # Option A+: Fetch proxy list on boot (e.g. Webshare download link)
       # - key: BULK_ADD_PROXY_LIST_URL
@@ -58,7 +67,27 @@ services:
       # ---- container knobs ----
       - key: SUPERVISOR_DELAY
         value: "10"
-      # Render sets PORT automatically (default 10000); override only if you
-      # change the service port in the dashboard.
       - key: PORT
         value: "10000"
+
+  # ---------------------------------------------------------------------------
+  # FeelingSurf Viewer (background) — auto-surf viewer, one env var, done.
+  #
+  # Type: background worker (not web) so the free Render plan's 1-web-service
+  # slot stays with 9Hits, while this uses the free plan's 1-background slot.
+  # Render automatically respects the container's built-in Docker HEALTHCHECK
+  # (http://localhost:3000) and restarts it on failure.
+  #
+  # If you're on a paid plan you can change `type: background` to `type: web`
+  # and set `healthCheckPath: /`.
+  # ---------------------------------------------------------------------------
+  - type: background
+    name: feelingsurf-viewer
+    runtime: image
+    plan: free
+    image:
+      url: feelingsurf/viewer:stable
+    envVars:
+      # Required - prompted as a secret.
+      - key: access_token
+        sync: false
