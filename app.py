@@ -33,6 +33,8 @@ def run_supervisor():
     env["SYSTEM_SESSION"] = SYSTEM_SESSION
     env["CLEAR_ALL_SESSIONS"] = os.environ.get("CLEAR_ALL_SESSIONS", "yes")
     env["HIDE_BROWSER"] = "yes"
+    # HF Gradio Spaces have 16 GB RAM, so 9Hits stays enabled by default here.
+    env["NINEHITS_ENABLED"] = os.environ.get("NINEHITS_ENABLED", "yes")
 
     script_path = os.path.join(os.path.dirname(__file__), "start.sh")
     proc = subprocess.Popen(

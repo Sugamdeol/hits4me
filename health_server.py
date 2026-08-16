@@ -9,8 +9,9 @@ Serves GET/HEAD on 0.0.0.0:$PORT for:
 Response (200) example:
     {
       "service": "hits4me-combined-viewer",
-      "version": "2.1.0",
+      "version": "2.2.0",
       "status": "ok",                 # "ok" | "restarting" | "error"
+      "viewer_enabled": true,         # is 9Hits toggled on (NINEHITS_ENABLED)?
       "viewer_running": true,         # is the 9Hits run-pass process alive?
       "supervisor_running": true,
       "viewer_pid": 12,
@@ -21,6 +22,10 @@ Response (200) example:
       "feelingsurf_running": true,
       "uptime_seconds": 123
     }
+
+When NINEHITS_ENABLED=no (the default) the 9Hits fields (`viewer_running`,
+`viewer_phase`, `viewer_silent_seconds`, `xvfb_running`) are `null` and
+`viewer_enabled` is `false`; `status` is still `ok` while FeelingSurf is up.
 
 Semantics:
   * Always 200 while the supervisor is alive, so Render never kill-loops the
@@ -53,6 +58,10 @@ FEELINGSURF_SUPERVISOR_PID = int(
 FEELINGSURF_ENABLED = os.environ.get("FEELINGSURF_ENABLED", "yes").lower() not in (
     "0", "no", "false", "off"
 )
+# 9Hits is OFF by default so the container fits on 512 MB free instances.
+NINEHITS_ENABLED = os.environ.get("NINEHITS_ENABLED", "no").lower() not in (
+    "0", "no", "false", "off"
+)
 FEELINGSURF_PORT = int(os.environ.get("FEELINGSURF_PORT", "3000") or 3000)
 PID_FILE = os.environ.get("VIEWER_PID_FILE", "/tmp/viewer.pid")
 RESTART_FILE = os.environ.get("VIEWER_RESTART_FILE", "/tmp/viewer.restarts")
@@ -62,7 +71,7 @@ XVFB_PID_FILE = "/tmp/xvfb.pid"
 FEELINGSURF_PID_FILE = "/tmp/feelingsurf.pid"
 FEELINGSURF_RESTART_FILE = "/tmp/feelingsurf.restarts"
 STARTED_AT = time.time()
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 HEALTH_PATHS = ("/", "/health", "/healthz", "/ping")
 
@@ -225,12 +234,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _health(self):
-        viewer = viewer_running()
+        # When 9Hits is disabled the viewer-specific health signals are
+        # irrelevant -> report them as null so monitors don't flag a missing
+        # viewer; `viewer_enabled: false` is the source of truth instead.
+        viewer = viewer_running() if NINEHITS_ENABLED else None
         supervisor = supervisor_running()
         feelingsurf = feelingsurf_running()
         feelingsurf_supervisor = feelingsurf_supervisor_running()
         supervisors_ok = supervisor and feelingsurf_supervisor is not False
-        viewers_ok = viewer and feelingsurf is not False
+        # `is not False` treats a disabled viewer (None) as healthy, so the
+        # combined status stays "ok" whenever the enabled viewers are up.
+        viewers_ok = (viewer is not False) and (feelingsurf is not False)
         if viewers_ok and supervisors_ok:
             status = "ok"
         elif supervisors_ok:
@@ -242,12 +256,13 @@ class Handler(BaseHTTPRequestHandler):
                 "service": "hits4me-combined-viewer",
                 "version": VERSION,
                 "status": status,
+                "viewer_enabled": NINEHITS_ENABLED,
                 "viewer_running": viewer,
                 "supervisor_running": supervisor,
                 "viewer_pid": _read_int(PID_FILE),
-                "viewer_phase": viewer_phase(),
-                "viewer_silent_seconds": viewer_silent_seconds(),
-                "xvfb_running": xvfb_running(),
+                "viewer_phase": viewer_phase() if NINEHITS_ENABLED else None,
+                "viewer_silent_seconds": viewer_silent_seconds() if NINEHITS_ENABLED else None,
+                "xvfb_running": xvfb_running() if NINEHITS_ENABLED else None,
                 "restarts": _read_int(RESTART_FILE),
                 "feelingsurf_enabled": FEELINGSURF_ENABLED,
                 "feelingsurf_running": feelingsurf,

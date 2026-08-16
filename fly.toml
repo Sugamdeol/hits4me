@@ -9,6 +9,8 @@ primary_region = "iad"
 
 [env]
   PORT = "10000"
+  # 4 GB RAM configured below -> both viewers fit, so 9Hits stays on.
+  NINEHITS_ENABLED = "yes"
   FEELINGSURF_ENABLED = "yes"
   CLEAR_ALL_SESSIONS = "yes"
   SYSTEM_SESSION = "yes"

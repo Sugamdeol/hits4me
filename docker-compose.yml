@@ -15,6 +15,7 @@ services:
     environment:
       PORT: "10000"
       FEELINGSURF_PORT: "3000"
+      NINEHITS_ENABLED: "${NINEHITS_ENABLED:-no}"
       FEELINGSURF_ENABLED: "${FEELINGSURF_ENABLED:-yes}"
       ACCESS_TOKEN: "${ACCESS_TOKEN:-}"
       ACCESS_KEY: "${ACCESS_KEY:-}"
