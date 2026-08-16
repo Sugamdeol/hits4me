@@ -8,13 +8,17 @@ Serves GET/HEAD on 0.0.0.0:$PORT for:
 
 Response (200) example:
     {
-      "service": "9hits-viewer",
-      "version": "1.0.0",
-      "status": "ok",            # "ok" | "restarting" | "error"
-      "viewer_running": true,    # is the viewer process alive right now?
+      "service": "hits4me-combined-viewer",
+      "version": "2.1.0",
+      "status": "ok",                 # "ok" | "restarting" | "error"
+      "viewer_running": true,         # is the 9Hits run-pass process alive?
       "supervisor_running": true,
       "viewer_pid": 12,
-      "restarts": 0,             # how many times the viewer was relaunched
+      "viewer_phase": "run",          # "init" (applying config) | "run" | "down"
+      "viewer_silent_seconds": 3,     # output heartbeat age (health of the logs)
+      "xvfb_running": true,           # the 9Hits virtual display (:99)
+      "restarts": 0,                  # how many times the viewer was relaunched
+      "feelingsurf_running": true,
       "uptime_seconds": 123
     }
 
@@ -41,6 +45,8 @@ except ImportError:  # Python < 3.7
 
 PORT = int(os.environ.get("PORT", "10000") or 10000)
 SUPERVISOR_PID = int(os.environ.get("SUPERVISOR_PID", "0") or 0)
+XVFB_SUPERVISOR_PID = int(os.environ.get("XVFB_SUPERVISOR_PID", "0") or 0)
+VNC_SUPERVISOR_PID = int(os.environ.get("VNC_SUPERVISOR_PID", "0") or 0)
 FEELINGSURF_SUPERVISOR_PID = int(
     os.environ.get("FEELINGSURF_SUPERVISOR_PID", "0") or 0
 )
@@ -50,10 +56,13 @@ FEELINGSURF_ENABLED = os.environ.get("FEELINGSURF_ENABLED", "yes").lower() not i
 FEELINGSURF_PORT = int(os.environ.get("FEELINGSURF_PORT", "3000") or 3000)
 PID_FILE = os.environ.get("VIEWER_PID_FILE", "/tmp/viewer.pid")
 RESTART_FILE = os.environ.get("VIEWER_RESTART_FILE", "/tmp/viewer.restarts")
+STATE_FILE = os.environ.get("VIEWER_STATE_FILE", "/tmp/viewer.state")
+HEARTBEAT_FILE = os.environ.get("VIEWER_HEARTBEAT_FILE", "/tmp/viewer.lastoutput")
+XVFB_PID_FILE = "/tmp/xvfb.pid"
 FEELINGSURF_PID_FILE = "/tmp/feelingsurf.pid"
 FEELINGSURF_RESTART_FILE = "/tmp/feelingsurf.restarts"
 STARTED_AT = time.time()
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 HEALTH_PATHS = ("/", "/health", "/healthz", "/ping")
 
@@ -80,6 +89,28 @@ def _pid_alive(pid):
 
 def viewer_running():
     return _pid_alive(_read_int(PID_FILE))
+
+
+def viewer_phase():
+    """Current 9Hits lifecycle phase: init | run | down (None if unknown)."""
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as fh:
+            phase = fh.read().strip()
+            return phase or None
+    except OSError:
+        return None
+
+
+def viewer_silent_seconds():
+    """Seconds since the viewer last printed anything (None if no data yet)."""
+    try:
+        return int(time.time() - os.stat(HEARTBEAT_FILE).st_mtime)
+    except OSError:
+        return None
+
+
+def xvfb_running():
+    return _pid_alive(_read_int(XVFB_PID_FILE))
 
 
 def supervisor_running():
@@ -133,6 +164,9 @@ def _shutdown(_signum=None, _frame=None):
     for pid in (
         SUPERVISOR_PID,
         _read_int(PID_FILE),
+        XVFB_SUPERVISOR_PID,
+        _read_int(XVFB_PID_FILE),
+        VNC_SUPERVISOR_PID,
         FEELINGSURF_SUPERVISOR_PID,
         _read_int(FEELINGSURF_PID_FILE),
     ):
@@ -144,6 +178,27 @@ def _shutdown(_signum=None, _frame=None):
     sys.exit(0)
 
 
+def _quiet(func):
+    """Swallow client-disconnect errors (BrokenPipeError & friends).
+
+    Render's health checker and uptime bots routinely hang up before reading
+    the response body; without this every such abort dumped a long
+    BrokenPipeError traceback into the logs.
+    """
+
+    def wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            pass
+        except OSError as exc:
+            if getattr(exc, "errno", None) not in (32, 104):  # EPIPE, ECONNRESET
+                raise
+        return None
+
+    return wrapper
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "hits4me-health/" + VERSION
     protocol_version = "HTTP/1.1"
@@ -151,6 +206,7 @@ class Handler(BaseHTTPRequestHandler):
     def _path(self):
         return self.path.split("?", 1)[0]
 
+    @_quiet
     def do_GET(self):
         if self._path() in HEALTH_PATHS:
             self._health()
@@ -158,6 +214,7 @@ class Handler(BaseHTTPRequestHandler):
             body = b"not found\n"
             self._send(404, {}, body, "text/plain")
 
+    @_quiet
     def do_HEAD(self):
         if self._path() in HEALTH_PATHS:
             self.send_response(200)
@@ -188,6 +245,9 @@ class Handler(BaseHTTPRequestHandler):
                 "viewer_running": viewer,
                 "supervisor_running": supervisor,
                 "viewer_pid": _read_int(PID_FILE),
+                "viewer_phase": viewer_phase(),
+                "viewer_silent_seconds": viewer_silent_seconds(),
+                "xvfb_running": xvfb_running(),
                 "restarts": _read_int(RESTART_FILE),
                 "feelingsurf_enabled": FEELINGSURF_ENABLED,
                 "feelingsurf_running": feelingsurf,
@@ -208,7 +268,10 @@ class Handler(BaseHTTPRequestHandler):
         for key, value in headers.items():
             self.send_header(key, value)
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            pass  # client hung up before reading; nothing to do about it
 
     def log_message(self, _fmt, *_args):
         pass  # keep logs tidy; the viewer dashboard is already in the logs
