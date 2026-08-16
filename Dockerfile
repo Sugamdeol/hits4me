@@ -35,6 +35,8 @@ COPY start.sh        /start.sh
 COPY run_pty.py      /run_pty.py
 COPY health_server.py /health_server.py
 COPY fetch_proxy_list.py /fetch_proxy_list.py
+# Shared env -> viewer flag mapping, also used by the Docker-free run_native.py.
+COPY viewer_config.py /viewer_config.py
 
 RUN chmod +x /start.sh /run_pty.py /health_server.py /fetch_proxy_list.py
 

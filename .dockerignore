@@ -6,3 +6,5 @@
 *.md
 docker-compose.yml
 render.yaml
+tests/
+.9hits/

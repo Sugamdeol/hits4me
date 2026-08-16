@@ -11,13 +11,19 @@ import urllib.error
 import urllib.request
 
 
-def fetch_and_convert(url):
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": "hits4me-fetch/1.0"},
-    )
+class ProxyFetchError(Exception):
+    """Raised by fetch() when the list cannot be downloaded or parsed."""
+
+
+def fetch(url, timeout=60):
+    """Download ``url`` and return a 9Hits-formatted proxy list string.
+
+    Importable counterpart of the CLI (used by start.sh / run_native.py).
+    Raises ProxyFetchError with a human readable message on failure.
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": "hits4me-fetch/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw_body = resp.read()
     except urllib.error.HTTPError as e:
         err_body = ""
@@ -26,28 +32,22 @@ def fetch_and_convert(url):
         except Exception:
             pass
         if err_body:
-            sys.stderr.write(f"HTTP error {e.code}: {err_body[:300]}\n")
-        else:
-            sys.stderr.write(f"HTTP error {e.code}: {e.reason}\n")
-        sys.exit(1)
+            raise ProxyFetchError(f"HTTP error {e.code}: {err_body[:300]}")
+        raise ProxyFetchError(f"HTTP error {e.code}: {e.reason}")
     except Exception as e:
-        sys.stderr.write(f"Failed to fetch proxy list: {e}\n")
-        sys.exit(1)
+        raise ProxyFetchError(f"Failed to fetch proxy list: {e}")
 
     try:
         body = raw_body.decode("utf-8", errors="replace").strip()
     except Exception as e:
-        sys.stderr.write(f"Failed to decode response: {e}\n")
-        sys.exit(1)
+        raise ProxyFetchError(f"Failed to decode response: {e}")
 
     if not body:
-        sys.stderr.write("Empty response received from proxy URL\n")
-        sys.exit(1)
+        raise ProxyFetchError("Empty response received from proxy URL")
 
     # Check for JSON error response (e.g. Webshare {"download_token": [...]})
     if body.startswith("{"):
-        sys.stderr.write(f"Proxy list returned error response: {body[:300]}\n")
-        sys.exit(1)
+        raise ProxyFetchError(f"Proxy list returned error response: {body[:300]}")
 
     proxies = []
     for line in body.splitlines():
@@ -65,10 +65,19 @@ def fetch_and_convert(url):
             sys.stderr.write(f"Skipping malformed line: {line[:50]}\n")
 
     if not proxies:
-        sys.stderr.write("No valid proxies found in response\n")
+        raise ProxyFetchError("No valid proxies found in response")
+
+    return "|".join(proxies)
+
+
+def fetch_and_convert(url):
+    try:
+        result = fetch(url)
+    except ProxyFetchError as e:
+        sys.stderr.write(f"{e}\n")
         sys.exit(1)
 
-    sys.stdout.write("|".join(proxies) + "\n")
+    sys.stdout.write(result + "\n")
     sys.exit(0)
 
 

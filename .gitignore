@@ -1,3 +1,8 @@
 .env
 __pycache__/
 *.pyc
+
+# native runner (run_native.py) artifacts
+.9hits/
+9hits.log
+nhviewer

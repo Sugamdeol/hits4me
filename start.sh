@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Entrypoint for the 9Hits Viewer v6 + /health endpoint container.
+# Entrypoint for the 9Hits Viewer v6 + /health endpoint CONTAINER.
 #
 #   * Builds the /nh.sh argument list from environment variables
-#     (ACCESS_KEY, SYSTEM_SESSION, ALLOW_CRYPTO, ... - see README.md).
+#     (ACCESS_KEY, SYSTEM_SESSION, ALLOW_CRYPTO, ... - see README.md), using
+#     the shared viewer_config.py so the Docker and non-Docker paths agree.
 #   * Supervises the viewer: it runs under a pseudo-TTY (Render and
 #     `docker run -d` don't allocate a TTY, and the viewer exits without
 #     one) and is relaunched automatically if it exits.
@@ -11,6 +12,10 @@
 #
 # Any extra positional arguments (e.g. a start command set on Render or
 # passed to `docker run`) are appended to /nh.sh as additional flags.
+#
+# NOT USING DOCKER? Use run_native.py instead - it does all of the above
+# without a container, a daemon, root or systemd:
+#     ACCESS_KEY=xxx python3 run_native.py --system-session
 # =============================================================================
 set -u
 
@@ -27,6 +32,7 @@ if [ -n "${BULK_ADD_PROXY_LIST_URL:-}" ] && [ -z "${BULK_ADD_PROXY_LIST:-}" ]; t
   if fetch_out=$(python3 "$SCRIPT_DIR/fetch_proxy_list.py" "$BULK_ADD_PROXY_LIST_URL" 2>"$fetch_err_file"); then
     BULK_ADD_PROXY_LIST="$fetch_out"
     BULK_ADD_PROXY_TYPE="${BULK_ADD_PROXY_TYPE:-socks5}"
+    export BULK_ADD_PROXY_LIST BULK_ADD_PROXY_TYPE
     proxy_count=$(awk -F'|' '{print NF}' <<< "$BULK_ADD_PROXY_LIST")
     log "fetched $proxy_count proxies from BULK_ADD_PROXY_LIST_URL"
   else
@@ -39,45 +45,19 @@ if [ -n "${BULK_ADD_PROXY_LIST_URL:-}" ] && [ -z "${BULK_ADD_PROXY_LIST:-}" ]; t
 fi
 
 # ---------------------------------------------------------------- arguments
+# viewer_config.py is the single source of truth for the env -> flag mapping
+# (shared with run_native.py). It emits one NUL-delimited argument per entry so
+# values containing spaces survive intact.
 NH_ARGS=()
-kv()   { [ -n "${2:-}" ] && NH_ARGS+=("--$1=$2"); }
-flag() {
-  case "${!1:-}" in
-    1|yes|true|on) NH_ARGS+=("--$2") ;;
-  esac
-}
-
-kv access-key         "${ACCESS_KEY:-}"
-kv allow-popups       "${ALLOW_POPUPS:-}"
-kv allow-adult        "${ALLOW_ADULT:-}"
-kv allow-crypto       "${ALLOW_CRYPTO:-}"
-kv hide-browser       "${HIDE_BROWSER:-}"
-kv ex-proxy-sessions  "${EX_PROXY_SESSIONS:-}"
-kv ex-proxy-url       "${EX_PROXY_URL:-}"
-kv bulk-add-proxy-list "${BULK_ADD_PROXY_LIST:-}"
-kv bulk-add-proxy-type "${BULK_ADD_PROXY_TYPE:-}"
-kv session-note       "${SESSION_NOTE:-}"
-kv note               "${NOTE:-}"
-kv cache-path         "${CACHE_PATH:-}"
-kv cache-limit        "${CACHE_LIMIT:-}"
-kv hide-columns       "${HIDE_COLUMNS:-}"
-kv install-dir        "${INSTALL_DIR:-}"
-kv default-dl         "${DEFAULT_DL:-}"
-kv restart-delay      "${RESTART_DELAY:-}"
-kv reset-interval     "${RESET_INTERVAL:-}"
-kv vnc-pw             "${VNC_PW:-}"
-kv vnc-port           "${VNC_PORT:-}"
-flag SYSTEM_SESSION    system-session
-flag CLEAR_ALL_SESSIONS clear-all-sessions
-flag RE_INSTALL        re-install
-flag VNC               vnc
-flag NO_VNC_PW         no-vnc-pw
-
-# EXTRA_ARGS: raw space-separated extra flags appended as-is.
-if [ -n "${EXTRA_ARGS:-}" ]; then
-  read -r -a extra_args <<< "$EXTRA_ARGS"
-  NH_ARGS+=("${extra_args[@]}")
-fi
+while IFS= read -r -d '' arg; do
+  NH_ARGS+=("$arg")
+done < <(python3 -c '
+import sys, os
+sys.path.insert(0, sys.argv[1])
+import viewer_config
+for a in viewer_config.build_config_args(include_nh_flags=True):
+    sys.stdout.write(a + "\0")
+' "$SCRIPT_DIR")
 
 # Extra positional args (Render start command / docker run args).
 NH_ARGS+=("$@")
@@ -92,19 +72,12 @@ if [[ "${EX_PROXY_SESSIONS:-0}" =~ ^[1-9][0-9]*$ ]] && [ -z "${EX_PROXY_URL:-}" 
 fi
 
 # ----------------------------------------------------------- RAM sanity check
-est_sessions=0
-if [[ "${EX_PROXY_SESSIONS:-0}" =~ ^[1-9][0-9]*$ ]]; then
-  est_sessions=$((est_sessions + EX_PROXY_SESSIONS))
-fi
-
-if [ -n "${BULK_ADD_PROXY_LIST:-}" ]; then
-  bulk_proxies=$(awk -F'|' '{print NF}' <<< "$BULK_ADD_PROXY_LIST")
-  est_sessions=$((est_sessions + bulk_proxies))
-fi
-
-case "${SYSTEM_SESSION:-}" in
-  1|yes|true|on) est_sessions=$((est_sessions + 1)) ;;
-esac
+est_sessions=$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import viewer_config
+print(viewer_config.estimate_sessions())
+' "$SCRIPT_DIR")
 
 mem_total_mb=0
 if [ -f /proc/meminfo ]; then
@@ -121,10 +94,10 @@ display_args() {
   local out=() a
   for a in "${NH_ARGS[@]}"; do
     case "$a" in
-      --access-key=*)        out+=("--access-key=****") ;;
+      --access-key=*)          out+=("--access-key=****") ;;
       --bulk-add-proxy-list=*) out+=("--bulk-add-proxy-list=****") ;;
-      --vnc-pw=*)            out+=("--vnc-pw=****") ;;
-      *)                     out+=("$a") ;;
+      --vnc-pw=*)              out+=("--vnc-pw=****") ;;
+      *)                       out+=("$a") ;;
     esac
   done
   echo "${out[*]}"

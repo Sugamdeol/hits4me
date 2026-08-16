@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Tiny HTTP health endpoint for the 9Hits viewer container (Render + uptime
-bots). Stdlib only, no dependencies.
+Tiny HTTP health endpoint for the 9Hits viewer (Render + uptime bots).
+Stdlib only, no dependencies.
 
 Serves GET/HEAD on 0.0.0.0:$PORT for:
     /  /health  /healthz  /ping
@@ -25,12 +25,18 @@ Semantics:
     container, which is the correct recovery).
   * For uptime bots: monitor the keyword `"status": "ok"` to be alerted when
     the viewer is crash-looping while the container is still up.
+
+Two ways to use it:
+  * as a script (Docker entrypoint): reads /tmp/viewer.pid + /tmp/viewer.restarts
+  * as a module (run_native.py): ``serve(port, status_provider)`` /
+    ``serve_in_thread(port, status_provider)`` with a custom status callable.
 """
 
 import json
 import os
 import signal
 import sys
+import threading
 import time
 
 try:
@@ -78,6 +84,19 @@ def supervisor_running():
     return _pid_alive(SUPERVISOR_PID)
 
 
+def default_status():
+    """Status dict derived from the pid/restart files written by start.sh."""
+    viewer = viewer_running()
+    supervisor = supervisor_running()
+    return {
+        "viewer_running": viewer,
+        "supervisor_running": supervisor,
+        "viewer_pid": _read_int(PID_FILE),
+        "restarts": _read_int(RESTART_FILE),
+        "uptime_seconds": int(time.time() - STARTED_AT),
+    }
+
+
 def _reap(_signum=None, _frame=None):
     """Reap orphaned children (harmless if there are none)."""
     while True:
@@ -104,75 +123,117 @@ def _shutdown(_signum=None, _frame=None):
     sys.exit(0)
 
 
-class Handler(BaseHTTPRequestHandler):
-    server_version = "hits4me-health/" + VERSION
-    protocol_version = "HTTP/1.1"
+def make_handler(status_provider):
+    """Build a BaseHTTPRequestHandler subclass bound to ``status_provider``."""
 
-    def _path(self):
-        return self.path.split("?", 1)[0]
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "hits4me-health/" + VERSION
+        protocol_version = "HTTP/1.1"
 
-    def do_GET(self):
-        if self._path() in HEALTH_PATHS:
-            self._health()
-        else:
-            body = b"not found\n"
-            self._send(404, {}, body, "text/plain")
+        def _path(self):
+            return self.path.split("?", 1)[0]
 
-    def do_HEAD(self):
-        if self._path() in HEALTH_PATHS:
-            self.send_response(200)
-        else:
-            self.send_response(404)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", "0")
-        self.end_headers()
+        def do_GET(self):
+            if self._path() in HEALTH_PATHS:
+                self._health()
+            else:
+                self._send(404, {}, b"not found\n", "text/plain")
 
-    def _health(self):
-        viewer = viewer_running()
-        supervisor = supervisor_running()
-        if viewer and supervisor:
-            status = "ok"
-        elif supervisor:
-            status = "restarting"
-        else:
-            status = "error"
-        body = json.dumps(
-            {
+        def do_HEAD(self):
+            if self._path() in HEALTH_PATHS:
+                self.send_response(200)
+            else:
+                self.send_response(404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def _health(self):
+            try:
+                info = dict(status_provider() or {})
+            except Exception as exc:  # never let a bad probe 500 the endpoint
+                info = {
+                    "viewer_running": False,
+                    "supervisor_running": False,
+                    "error": str(exc)[:200],
+                }
+
+            viewer = bool(info.get("viewer_running"))
+            supervisor = bool(info.get("supervisor_running"))
+            if viewer and supervisor:
+                status = "ok"
+            elif supervisor:
+                status = "restarting"
+            else:
+                status = "error"
+
+            payload = {
                 "service": "9hits-viewer",
                 "version": VERSION,
                 "status": status,
-                "viewer_running": viewer,
-                "supervisor_running": supervisor,
-                "viewer_pid": _read_int(PID_FILE),
-                "restarts": _read_int(RESTART_FILE),
-                "uptime_seconds": int(time.time() - STARTED_AT),
-            },
-            sort_keys=True,
-        )
-        code = 200 if supervisor else 503
-        self._send(code, {"Cache-Control": "no-store"}, body.encode("utf-8"), "application/json")
+            }
+            payload.update(info)
+            body = json.dumps(payload, sort_keys=True, default=str)
+            code = 200 if supervisor else 503
+            self._send(
+                code,
+                {"Cache-Control": "no-store"},
+                body.encode("utf-8"),
+                "application/json",
+            )
 
-    def _send(self, code, headers, body, content_type):
-        self.send_response(code)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        for key, value in headers.items():
-            self.send_header(key, value)
-        self.end_headers()
-        self.wfile.write(body)
+        def _send(self, code, headers, body, content_type):
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(body)
 
-    def log_message(self, _fmt, *_args):
-        pass  # keep logs tidy; the viewer dashboard is already in the logs
+        def log_message(self, _fmt, *_args):
+            pass  # keep logs tidy; the viewer dashboard is already in the logs
+
+    return Handler
+
+
+def make_server(port=None, status_provider=None, host="0.0.0.0"):
+    port = PORT if port is None else int(port)
+    provider = status_provider or default_status
+    server = Server((host, port), make_handler(provider))
+    server.daemon_threads = True  # don't let a slow client delay shutdown
+    return server
+
+
+def serve_in_thread(port=None, status_provider=None, host="0.0.0.0"):
+    """Start the health endpoint on a daemon thread; returns the server."""
+    server = make_server(port, status_provider, host)
+    thread = threading.Thread(
+        target=server.serve_forever, name="health-server", daemon=True
+    )
+    thread.start()
+    return server
+
+
+def serve(port=None, status_provider=None, host="0.0.0.0"):
+    """Blocking variant used by the Docker entrypoint."""
+    server = make_server(port, status_provider, host)
+    print(
+        "[health] listening on %s:%d (GET /health)" % (host, server.server_address[1]),
+        flush=True,
+    )
+    server.serve_forever()
+
+
+# Backwards compatible alias: the old module-level Handler class.
+Handler = make_handler(default_status)
 
 
 def main():
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGCHLD, _reap)
-    server = Server(("0.0.0.0", PORT), Handler)
-    server.daemon_threads = True  # don't let a slow client delay shutdown
-    print("[health] listening on 0.0.0.0:%d (GET /health)" % PORT, flush=True)
-    server.serve_forever()
+    serve(PORT)
 
 
 if __name__ == "__main__":
