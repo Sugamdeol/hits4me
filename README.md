@@ -214,7 +214,9 @@ If you have dedicated or private proxies:
 
 ## Environment Variables Reference
 
-| Env var | `/nh.sh` flag | Default | Description |
+Viewer config flags are applied by the **init pass** (`nhviewer <flags> --exit-on-init`); the **run pass** then starts with `--auto-start --in-loop --render-to-terminal [--reset-interval=...]` — the same flow as the [official 9Hits v6 installer](https://github.com/9hitste/install).
+
+| Env var | `nhviewer` flag | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `ACCESS_KEY` | `--access-key` | *required* | From [panel.9hits.com/user/profile](https://panel.9hits.com/user/profile) |
 | `SYSTEM_SESSION` | `--system-session` | `no` | `yes`/`no` — runs direct session on instance IP |
@@ -230,10 +232,21 @@ If you have dedicated or private proxies:
 | `ALLOW_POPUPS` | `--allow-popups` | `no` | Popups toggle (keep `no` to save RAM/BW) |
 | `ALLOW_ADULT` | `--allow-adult` | `no` | Adult campaigns toggle |
 | `ALLOW_CRYPTO` | `--allow-crypto` | `no` | Crypto mining campaigns toggle |
-| `CACHE_LIMIT` | `--cache-limit` | `0` | Disk cache limit (`0` disables disk cache) |
-| `RESET_INTERVAL` | `--reset-interval` | `2h` | Periodic viewer reset (`2h`, `6h`, `30m`) |
+| `CACHE_LIMIT` | `--cache-limit` | `0` | Disk cache limit in bytes (`0` = no cache; unset = official 200 MB cap) |
+| `HIDE_COLUMNS` | `--hide-columns` | *none* | Dashboard columns to hide, e.g. `quality,points` |
+| `RESET_INTERVAL` | `--reset-interval` (run pass) | `2h` | Graceful self-restart interval (`2h`, `6h`, `30m`) |
 | `PORT` | — | `10000` | Port for `/health` endpoint |
-| `SUPERVISOR_DELAY` | — | `10` | Seconds before relaunching exited viewer |
+| `SUPERVISOR_DELAY` | — | `10` | Seconds before relaunching an exited viewer (alias: `RESTART_DELAY`) |
+| `EXTRA_ARGS` | — | *none* | Extra raw flags appended to the init pass |
+| `DEFAULT_DL` | — | *none* | Download a different viewer build from this URL at container start |
+| `NH_DISPLAY` | — | `:99` | X display number used for the 9Hits Xvfb |
+| `NH_RESOLUTION` | — | `auto` | Xvfb resolution, e.g. `1920x1080x24` (`auto` = scale with CPU/RAM) |
+| `INIT_TIMEOUT` | — | `300` | Max seconds for one init pass before it is killed and retried |
+| `NH_WATCHDOG` | — | `yes` | Restart the viewer when it is wedged (no output **and** no CPU progress) |
+| `NH_WATCHDOG_STUCK` | — | `600` | Seconds of silence before the wedge watchdog engages |
+| `NH_RENDER_TO_TERMINAL` | — | `yes` | `no` disables the live dashboard (silent logs; watchdog still works) |
+| `PTY_COLS` / `PTY_ROWS` | — | `120` / `30` | Terminal size handed to the viewer dashboard |
+| `VNC` / `VNC_PW` / `VNC_PORT` / `NO_VNC_PW` | — | off / — / `5901` / off | Optional x11vnc mirror of the 9Hits display for live viewing |
 
 ---
 
@@ -247,16 +260,22 @@ GET https://<your-service>/health
 
 ```json
 {
-  "service": "9hits-viewer",
-  "version": "1.0.0",
+  "service": "hits4me-combined-viewer",
+  "version": "2.1.0",
   "status": "ok",
   "viewer_running": true,
   "supervisor_running": true,
   "viewer_pid": 42,
+  "viewer_phase": "run",
+  "viewer_silent_seconds": 1,
+  "xvfb_running": true,
   "restarts": 0,
   "uptime_seconds": 3600
 }
 ```
+
+* `viewer_phase`: `init` = applying your config/sessions, `run` = viewer is up, `down` = between restarts.
+* `viewer_silent_seconds`: age of the last dashboard output. A large value together with rising `restarts` means the wedge watchdog is restarting a hung viewer.
 
 Point any free uptime monitor (**UptimeRobot, Better Stack, Cron-job.org, Kuma**) to ping `https://<your-app>/health` every **5 to 10 minutes** to keep free-tier instances active and prevent sleep timeouts.
 
@@ -268,3 +287,8 @@ Point any free uptime monitor (**UptimeRobot, Better Stack, Cron-job.org, Kuma**
 * **`Auth: Duplicate SESSION on IP [x.x.x.x]`** — Multiple sessions from your account on the same IP. Ensure `SYSTEM_SESSION=no` when using proxies, or enable `CLEAR_ALL_SESSIONS=yes` to clear lingering connections.
 * **`Pool error: The public pool is closed!`** — Set `EX_PROXY_SESSIONS=0` (or unset it) and use `BULK_ADD_PROXY_LIST` / `BULK_ADD_PROXY_LIST_URL`, or provide your own custom pool via `EX_PROXY_URL`.
 * **`User not found!`** — `ACCESS_KEY` is incorrect or missing.
+* **Logs stop right after deploy / viewer never appears (the Aug-2026 upstream change)** — the renewed `9hitste/appv6` image used to extract a ~145 MB bzip2 viewer tarball at every container start through its own `/nh.sh`, stalling for many minutes on free-tier CPUs and then hanging silently. This repo no longer does that: the viewer is extracted at **image build time** and started via the official two-pass flow with our own supervised **Xvfb :99**. If you still see stalls, check `/health` — `viewer_phase` (`init`/`run`/`down`) and `viewer_silent_seconds` tell you exactly where it is.
+* **`WATCHDOG: no output ... no CPU progress` in the logs** — the viewer wedged (typically OOM-adjacent on 512 MB instances or a stuck Chromium) and was restarted automatically. If it repeats, lower the session count, set `FEELINGSURF_ENABLED=no`, or move to a bigger instance (v6 recommends ≥ 2 GB RAM).
+* **Init pass keeps failing** (`init pass failed/timed out`) — the 9Hits API was unreachable or very slow; the supervisor retries 3× with backoff and then launches anyway (the next restart re-applies config). Increase `INIT_TIMEOUT` on very slow networks.
+* **`/dev/shm` is only 64 MB** — free Docker tiers can't set `--shm-size`. The entrypoint tries a best-effort remount; where you control Docker yourself (oracle/compose), keep `shm_size: 2g` (already in `docker-compose.yml`).
+* **VNC: watch the viewer live** — set `VNC=yes` + `VNC_PW=<pass>` and connect to port `5901` (only on hosts that expose it; Render web services only expose `$PORT`).
