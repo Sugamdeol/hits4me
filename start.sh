@@ -658,6 +658,16 @@ if _yes "$NINEHITS_ENABLED"; then
             log "9Hits crashed $streak times at startup - disabling single-process for 9Hits (balanced flags only)"
           fi
         fi
+        # Fast-crash detector: the previous run pass died within 10s with a
+        # signal/abort exit code - the classic --single-process failure on
+        # 512 MB boxes (Chromium exits 133 = SIGTRAP). Waiting for the 3-cycle
+        # streak above would take ~22 min because each cycle includes a full
+        # init pass, so drop SP on THIS launch instead.
+        if [ -f /tmp/viewer.fastcrash ]; then
+          rm -f /tmp/viewer.fastcrash
+          log "9Hits run pass died within 10s under --single-process - dropping single-process for this launch (balanced flags only)"
+          NH_SP_ON=no
+        fi
         if _yes "$NH_SP_ON"; then
           run_args+=("${NH_EXTREME_FLAGS[@]}")
         fi
@@ -699,10 +709,26 @@ if _yes "$NINEHITS_ENABLED"; then
       ) &
       local vpid=$!
       echo "$vpid" > /tmp/viewer.pid
+      local launch_epoch
+      launch_epoch=$(date +%s 2>/dev/null || echo 0)
       wait "$vpid"
       local code=$?
       rm -f /tmp/viewer.pid
       echo "down" > /tmp/viewer.state
+      # Fast-crash sentinel: a run pass that dies in under 10 seconds with a
+      # non-clean, non-shutdown exit code almost always means the Chromium
+      # flags themselves are unusable here (--single-process -> code 133 /
+      # SIGTRAP on Render's 512 MB plan). The next iteration reads this file
+      # and relaunches WITHOUT --single-process straight away.
+      local now_epoch=0 uptime_s=0
+      now_epoch=$(date +%s 2>/dev/null || echo 0)
+      [ "$launch_epoch" -gt 0 ] && uptime_s=$((now_epoch - launch_epoch))
+      if [ "$uptime_s" -lt 10 ] \
+         && [ "$code" -ne 0 ] && [ "$code" -ne 143 ] && [ "$code" -ne 137 ] \
+         && [ "$code" -ne 15 ] && [ "$code" -ne 9 ]; then
+        touch /tmp/viewer.fastcrash 2>/dev/null || true
+        log "9Hits run pass exited after ${uptime_s}s with code $code - flagging fast crash (single-process will be dropped on the next launch)"
+      fi
       local restarts=0
       [ -f /tmp/viewer.restarts ] && restarts=$(cat /tmp/viewer.restarts 2>/dev/null || echo 0)
       echo $((restarts + 1)) > /tmp/viewer.restarts

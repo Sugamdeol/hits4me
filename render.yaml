@@ -21,21 +21,23 @@ services:
         value: "10000"
 
       # --- BOTH viewers, CONCURRENTLY, in 512 MB -----------------------------
-      # Measured with a real Chromium 149 (see README "Measured memory"):
-      #   LOW_MEMORY=extreme  (both viewers --single-process)  -> ~324 MB pair
-      #   9Hits SP + FeelingSurf swiftshader (if SP crashes FS) -> ~458 MB
-      # Both fit under the 512 MB budget, so the two viewers run at the same
-      # time instead of alternating. Layers that make it safe:
-      #   1. LOW_MEMORY=extreme shrinks both Chromiums hard.
+      # LOW_MEMORY=balanced is the safe default here. LOW_MEMORY=extreme adds
+      # --single-process --in-process-gpu, which Chromium labels unsupported
+      # and which dies within seconds on Render's free 512 MB plan (run pass
+      # exits with code 133 = SIGTRAP), producing a crash loop.
+      # Layers that keep the balanced pair inside the budget:
+      #   1. LOW_MEMORY=balanced shrinks both Chromiums (no --single-process).
       #   2. memguard.py watches total RSS (limit 512 MB, acts at 97% = 497 MB)
       #      and restarts the heaviest viewer BEFORE the platform can OOM-kill
       #      the container - a safety valve, not a scheduler.
-      #   3. DUAL_VIEWER_MODE=concurrent  = always run both, never time-slice.
-      #   4. Crash auto-fallback: if a viewer crash-loops 3x at startup under
-      #      single-process, its SP flags are dropped automatically (it keeps
-      #      running on the balanced set; NH_SP/FS_SP=no force that manually).
-      #      If FeelingSurf specifically fails with swiftshader under SP, set
-      #      FS_GL_MODE=disable-gpu.
+      #   3. Per-viewer caps NH_MAX_MEMORY_MB / FS_MAX_MEMORY_MB = 400 restart
+      #      only the runaway viewer, leaving the other one untouched.
+      #   4. DUAL_VIEWER_MODE=concurrent  = always run both, never time-slice.
+      #   5. INIT_TIMEOUT=600 gives the 9Hits config init pass enough time on
+      #      Render's throttled 0.1 vCPU (300s produced code 124 timeouts).
+      #   6. If you do re-enable extreme, start.sh's fast-crash detector drops
+      #      --single-process on the very next launch when the run pass dies
+      #      in under 10 seconds.
       - key: NINEHITS_ENABLED
         value: "yes"
       - key: FEELINGSURF_ENABLED
@@ -43,11 +45,19 @@ services:
       - key: DUAL_VIEWER_MODE
         value: "concurrent"     # both at the same time; auto escalates to time-slice
       - key: LOW_MEMORY
-        value: "extreme"        # balanced | extreme | auto | off
+        value: "balanced"       # balanced | extreme | auto | off
+                                # extreme (--single-process) crashes with code
+                                # 133 on Render free 512 MB - do not use here
+      - key: INIT_TIMEOUT
+        value: "600"            # 9Hits init pass budget (0.1 vCPU is slow)
       - key: NH_SP
-        value: "yes"            # single-process for 9Hits (auto-fallback on crash)
+        value: "no"             # single-process for 9Hits (unstable on Render)
       - key: FS_SP
-        value: "yes"            # single-process for FeelingSurf (auto-fallback on crash)
+        value: "no"             # single-process for FeelingSurf (unstable here)
+      - key: NH_MAX_MEMORY_MB
+        value: "400"            # restart only 9Hits if its tree exceeds 400 MB
+      - key: FS_MAX_MEMORY_MB
+        value: "400"            # restart only FeelingSurf above 400 MB
       - key: FS_GL_MODE
         value: "swiftshader"    # swiftshader | disable-gpu (last resort)
       - key: MEMGUARD_LIMIT_MB
