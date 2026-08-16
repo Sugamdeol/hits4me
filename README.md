@@ -20,7 +20,7 @@ Run the **9Hits Viewer v6** ([9hitste/appv6](https://hub.docker.com/r/9hitste/ap
 
 **Both viewers run simultaneously by default.** The image's `ENV` defaults
 turn on 9Hits + FeelingSurf at the same time (`DUAL_VIEWER_MODE=concurrent`,
-`LOW_MEMORY=extreme`), with per-viewer memory caps (`NH_MAX_MEMORY_MB=400`,
+`LOW_MEMORY=balanced`), with per-viewer memory caps (`NH_MAX_MEMORY_MB=400`,
 `FS_MAX_MEMORY_MB=400`) and a 24x7 process manager (`supervisor.py`) that
 keeps each viewer alive independently. Just set `ACCESS_KEY` (9Hits) and
 `ACCESS_TOKEN` (FeelingSurf) and both viewers will run, restart on crash,
@@ -90,7 +90,7 @@ The Blueprint ships with **BOTH viewers enabled** (`NINEHITS_ENABLED=yes`, `FEEL
 1. In [Render Dashboard](https://dashboard.render.com/) apply the Blueprint for this repo so it updates the existing **`9hits-viewer`** service (or open that service and redeploy).
 2. Or, only if `9hits-viewer` does not already exist, create **New → Web Service** → Docker runtime → Free tier and name it exactly `9hits-viewer`.
 3. `ACCESS_KEY` and `ACCESS_TOKEN` are **hard-coded in `render.yaml`** — no prompting needed, just deploy.
-4. Default environment comes from the Blueprint: both viewers + `DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=extreme` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)). After deploy, check `GET /health` → `effective_mode` and `memory_used_mb` to see whether both viewers run concurrently.
+4. Default environment comes from the Blueprint: both viewers + `DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=balanced` + `INIT_TIMEOUT=600` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)). After deploy, check `GET /health` → `effective_mode` and `memory_used_mb` to see whether both viewers run concurrently.
 5. *(Optional)* Deploy another free service in a different region (e.g. Frankfurt or Ohio) to get an extra unique IP address.
 
 ---
@@ -114,9 +114,18 @@ separate GPU process (~40–80 MB). FeelingSurf keeps upstream's swiftshader GL
 flags (upstream removed `--disable-gpu` because it crashes 2.5.2). Xvfb
 resolutions also shrink to 1280x720, and `MALLOC_TRIM_THRESHOLD_`/`MMAP`
 tunables make glibc give freed heap pages back to the kernel.
+**`LOW_MEMORY=balanced` is the image default** and is the safe setting for
+Render's 512 MB free plan: it applies every flag above without touching
+Chromium's process model.
 **`LOW_MEMORY=extreme`** takes it further: both viewers run with
-`--single-process --in-process-gpu` — measured **~324 MB for the pair**, which
-is what makes running BOTH viewers at the same time possible on 512 MB.
+`--single-process --in-process-gpu` — measured **~324 MB for the pair**, but
+Chromium labels `--single-process` unsupported and on Render 512 MB the 9Hits
+run pass dies within seconds with **exit code 133 (SIGTRAP)**, producing a
+crash loop. Use `extreme` only on hosts with ≥ 2 GB. If it is enabled anyway,
+`start.sh`'s **fast-crash detector** notices a run pass that exits in under
+10 s with a non-clean code and drops `--single-process` on the very next
+launch (seconds), instead of waiting for the old 3-cycle auto-fallback
+(~20+ min, since every cycle includes a full init pass).
 
 **Layer 2 — memory guardian (`memguard.py`, always on unless `off`).**
 Every few seconds it sums container RSS from `/proc` against the real limit
@@ -125,8 +134,10 @@ Every few seconds it sums container RSS from `/proc` against the real limit
 boxes), it **gracefully restarts the heaviest viewer** (TERM → KILL after 15 s;
 the viewer's own supervisor in `start.sh` brings it back) *before* the platform
 can OOM-kill the whole container. A cooldown prevents kill-thrash. With
-`DUAL_VIEWER_MODE=concurrent` + `extreme` the pair sits well under the
-threshold, so the guardian stays silent and both viewers run together.
+`DUAL_VIEWER_MODE=concurrent` and `LOW_MEMORY=balanced` the pair fits well
+under the threshold, so the guardian stays mostly silent and both viewers run
+together; the per-viewer caps (`NH_MAX_MEMORY_MB` / `FS_MAX_MEMORY_MB`, 400 MB
+each on Render) restart only the viewer that misbehaves.
 
 **Layer 3 — time-slice fallback (`DUAL_VIEWER_MODE`, default `concurrent`).**
 The image's default is `concurrent` (both viewers at the same time).
@@ -136,12 +147,14 @@ If you set `DUAL_VIEWER_MODE=auto` and the box really cannot fit both at once
 1500 = 25 min), so only one Chromium is resident at a time — guaranteed to
 fit 512 MB, at the cost of ~50% uptime per viewer. The supervisors gate their
 launches on a turn file (`/tmp/active_viewer`) and **fail open**: if memguard
-dies, both viewers run freely (no deadlock). With `LOW_MEMORY=extreme` the
-fallback rarely triggers.
+dies, both viewers run freely (no deadlock). With `LOW_MEMORY=balanced` plus
+the 400 MB per-viewer caps the fallback rarely triggers; switch to
+`DUAL_VIEWER_MODE=auto` if your workload (many sessions, heavy pages) does push
+the pair over the budget.
 
 | `DUAL_VIEWER_MODE` | Behaviour |
 | :--- | :--- |
-| `concurrent` (default) | **Always run both at the same time** (pair with `LOW_MEMORY=extreme`, ~324 MB). The guardian is the safety valve only. |
+| `concurrent` (default) | **Always run both at the same time** (pair with `LOW_MEMORY=balanced` + `NH_MAX_MEMORY_MB=400` / `FS_MAX_MEMORY_MB=400`). The guardian is the safety valve only. |
 | `auto` | Run both together; escalate to time-slice only if RAM proves too small. |
 | `time-slice` | Alternate every `TIME_SLICE` seconds. Predictable ~50% uptime each, zero OOM risk. |
 | `off` | Legacy: no guardian, no slicing (two viewers can still OOM 512 MB plans). |
@@ -287,25 +300,30 @@ actually charges; this is what memguard and the dashboard report):
 | **9Hits `extreme` + FeelingSurf swiftshader (`FS_SP=no`)** | **~458 RSS** ✅ |
 
 **What this means — and how to run BOTH at the same time:**
-With the *balanced* flags, two Chromium viewers can't both stay resident in
-512 MB (~550–620 MB), which is why `auto` mode time-slices them. But
-**`LOW_MEMORY=extreme` puts each viewer into single-process mode
-(`--single-process --in-process-gpu`)** — measured at **~324 MB for the whole
-pair** with two sessions each, stable over 60 s+ of real Chromium 149
-(and ~458 MB if FeelingSurf keeps its normal swiftshader processes via
-`FS_SP=no`). Both comfortably fit the 512 MB budget, so the two viewers run
-**concurrently**:
+`LOW_MEMORY=extreme` puts each viewer into single-process mode
+(`--single-process --in-process-gpu`) and measures **~324 MB for the whole
+pair** in a lab — but on Render's free 512 MB plan that mode is *not stable*:
+the 9Hits run pass crashes almost immediately with exit code 133 (SIGTRAP).
+The recommended and default configuration on Render is therefore **balanced**,
+with the per-viewer caps doing the trimming:
 
 ```env
 NINEHITS_ENABLED=yes
 FEELINGSURF_ENABLED=yes
 DUAL_VIEWER_MODE=concurrent    # both at the same time, no time-slicing
-LOW_MEMORY=extreme
+LOW_MEMORY=balanced
+INIT_TIMEOUT=600
+NH_MAX_MEMORY_MB=400
+FS_MAX_MEMORY_MB=400
 MEMGUARD_LIMIT_MB=512
 MEMGUARD_HARD_PCT=97           # guardian acts at 497 MB - before the OOM
 ```
 
-Safety nets keep `--single-process` from ever bricking a viewer:
+Safety nets keep `--single-process` from ever bricking a viewer if you do
+enable `extreme` on a bigger host:
+* **Fast-crash detector** — a run pass that exits in under 10 s with a
+  non-clean code sets `/tmp/viewer.fastcrash`, and the next launch drops
+  `--single-process` immediately.
 * **Crash auto-fallback** — if a viewer crash-loops 3× at startup, its
   single-process flags are dropped automatically (it keeps running on the
   balanced set; `NH_SP=no` / `FS_SP=no` force this manually).
@@ -347,7 +365,8 @@ Notes:
   viewer easily fits.
 * On hosts with ≥ 2 GB (Fly 4 GB, Oracle 24 GB, HF 16 GB) `LOW_MEMORY=auto`
   disables the flags, memguard never intervenes, and everything runs
-  concurrently as before.
+  concurrently as before. `LOW_MEMORY=extreme` (`--single-process`) also
+  requires ≥ 2 GB — it is not safe on Render's 512 MB free plan.
 
 ---
 
@@ -412,7 +431,7 @@ The combined repository `Dockerfile` is used on cloud platforms. Configure both 
 | Platform | Deployment | Notes |
 | :--- | :--- | :--- |
 | **Oracle Cloud Always Free** | use `docker compose up -d` | One combined service; the 24 GB tier has ample memory. |
-| **Render** | Blueprint (`render.yaml`) updates the single existing **`9hits-viewer`** web service; `ACCESS_TOKEN` is preconfigured. Both viewers are on by default, with `DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=extreme` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps. | The 512 MB free plan is handled by the three-layer stack (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)): memory flags shrink both Chromiums, memguard restarts the heaviest viewer before the platform OOMs the container, and the supervisor's per-slot memory cap restarts any single runaway viewer. |
+| **Render** | Blueprint (`render.yaml`) updates the single existing **`9hits-viewer`** web service; `ACCESS_TOKEN` is preconfigured. Both viewers are on by default, with `DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=balanced` + `NH_SP=no` / `FS_SP=no` + `INIT_TIMEOUT=600` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps (`extreme`/single-process crashes with code 133 here). | The 512 MB free plan is handled by the three-layer stack (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)): memory flags shrink both Chromiums, memguard restarts the heaviest viewer before the platform OOMs the container, and the supervisor's per-slot memory cap restarts any single runaway viewer. |
 | **Koyeb** | ACCESS_KEY + ACCESS_TOKEN are hard-coded in `koyeb.yaml`. | Uses `koyeb.yaml`; one service runs both viewers. |
 | **Fly.io** | Deploy this repository Dockerfile and set both secrets. | Uses `fly.toml`; one service runs both viewers. |
 | **Railway** | Deploy this repository Dockerfile and set both secrets. | Uses `railway.json`; one service runs both viewers. |
@@ -462,11 +481,11 @@ Viewer config flags are applied by the **init pass** (`nhviewer <flags> --exit-o
 | :--- | :--- | :--- | :--- |
 | `NINEHITS_ENABLED` | — | `yes` | `yes`/`no`/`1`/`0`/`true`/`false`/`on`/`off` — run the 9Hits viewer. **Both viewers are ON by default** so a bare deploy starts 9Hits + FeelingSurf together. Set to `no` to run only FeelingSurf |
 | `FEELINGSURF_ENABLED` | — | `yes` | `yes`/`no`/`1`/`0`/`true`/`false`/`on`/`off` — run the FeelingSurf viewer (auto-disables quietly when the binary is absent, e.g. the HF Gradio runtime) |
-| `DUAL_VIEWER_MODE` | — | `auto` | `auto` / `concurrent` / `time-slice` / `off` — how the two viewers share one small box (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)); `concurrent` + `LOW_MEMORY=extreme` = both at the same time in 512 MB |
+| `DUAL_VIEWER_MODE` | — | `auto` | `auto` / `concurrent` / `time-slice` / `off` — how the two viewers share one small box (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)); the image/Blueprint set `concurrent` + `LOW_MEMORY=balanced` = both at the same time in 512 MB |
 | `TIME_SLICE` | — | `1500` | Seconds each viewer runs per turn in `time-slice` mode (25 min default) |
-| `LOW_MEMORY` | — | `auto` | `auto` (flags on when box < 1 GB) / `off` / `balanced` / `extreme` (`--single-process` for both viewers, measured ~324 MB pair — lets both run concurrently in 512 MB; crash auto-fallback included) — Chromium memory-shrinking flags applied to both viewers |
-| `NH_SP` | — | `yes` | Single-process for 9Hits in `extreme` mode (auto-disabled after 3 startup crashes) |
-| `FS_SP` | — | `yes` | Single-process for FeelingSurf in `extreme` mode (auto-disabled after 3 startup crashes) |
+| `LOW_MEMORY` | — | `balanced` | `auto` (flags on when box < 1 GB) / `off` / `balanced` (**default, safe on Render 512 MB**) / `extreme` (`--single-process --in-process-gpu`, ~324 MB pair in a lab but **crashes with exit 133 on Render 512 MB** — needs ≥ 2 GB) — Chromium memory-shrinking flags applied to both viewers |
+| `NH_SP` | — | `no` | Single-process for 9Hits in `extreme` mode. Auto-fallback: dropped on the next launch if the run pass dies in under 10 s (fast-crash detector), and after 3 startup crashes |
+| `FS_SP` | — | `no` | Single-process for FeelingSurf in `extreme` mode. Same auto-fallback (dropped after repeated startup crashes) |
 | `FS_GL_MODE` | — | `swiftshader` | FeelingSurf GL: `swiftshader` (upstream) or `disable-gpu` (last resort if FS crash-loops under single-process) |
 | `FS_SHARE_DISPLAY` | — | `yes` | Reuse the 9Hits Xvfb display for FeelingSurf (one less X server on tight instances) |
 | `MEMGUARD_LIMIT_MB` | — | `0` (auto-detect) | Memory budget memguard enforces; set `512` on Render free / Koyeb nano. `0` = cgroup limit, then MemTotal |
@@ -622,12 +641,13 @@ Point any free uptime monitor (**UptimeRobot, Better Stack, Cron-job.org, Kuma**
 
 ## Troubleshooting
 
-* **Render: `Ran out of memory (used over 512MB)` → "Service recovered" → repeat (~1/min)** — the classic symptom of two un-tuned Chromium viewers on the free 512 MB plan. The current Blueprint runs **both viewers** with the 512 MB survival stack (`DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=extreme` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps), which keeps RSS under the limit: memguard restarts the heaviest viewer before the platform can kill the container, and the supervisor's per-slot memory cap restarts any single runaway viewer. Check `/health` → `effective_mode` / `memory_used_mb` / `memguard_interventions`. If you still see OOM (e.g. a proxy list with many sessions), lower the session count, set `FEELINGSURF_ENABLED=no`, or move to a ≥ 2 GB plan (9Hits v6's official recommendation).
+* **Render: `Ran out of memory (used over 512MB)` → "Service recovered" → repeat (~1/min)** — the classic symptom of two un-tuned Chromium viewers on the free 512 MB plan. The current Blueprint runs **both viewers** with the 512 MB survival stack (`DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=balanced` + `NH_SP=no` / `FS_SP=no` + `INIT_TIMEOUT=600` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps), which keeps RSS under the limit: memguard restarts the heaviest viewer before the platform can kill the container, and the supervisor's per-slot memory cap restarts any single runaway viewer. Check `/health` → `effective_mode` / `memory_used_mb` / `memguard_interventions`. If you still see OOM (e.g. a proxy list with many sessions), lower the session count, set `FEELINGSURF_ENABLED=no`, or move to a ≥ 2 GB plan (9Hits v6's official recommendation).
 * **`Auth: Duplicate USER on IP [x.x.x.x]`** — Another 9Hits user is already using that public/shared proxy IP. Switch to a system session on a dedicated cloud provider, refresh your Webshare list, or use private proxies.
 * **`Auth: Duplicate SESSION on IP [x.x.x.x]`** — Multiple sessions from your account on the same IP. Ensure `SYSTEM_SESSION=no` when using proxies, or enable `CLEAR_ALL_SESSIONS=yes` to clear lingering connections.
 * **`Pool error: The public pool is closed!`** — Set `EX_PROXY_SESSIONS=0` (or unset it) and use `BULK_ADD_PROXY_LIST` / `BULK_ADD_PROXY_LIST_URL`, or provide your own custom pool via `EX_PROXY_URL`.
 * **`User not found!`** — `ACCESS_KEY` is incorrect or missing.
 * **Logs stop right after deploy / viewer never appears (the Aug-2026 upstream change)** — the renewed `9hitste/appv6` image used to extract a ~145 MB bzip2 viewer tarball at every container start through its own `/nh.sh`, stalling for many minutes on free-tier CPUs and then hanging silently. This repo no longer does that: the viewer is extracted at **image build time** and started via the official two-pass flow with our own supervised **Xvfb :99**. If you still see stalls, check `/health` — `viewer_phase` (`init`/`run`/`down`) and `viewer_silent_seconds` tell you exactly where it is.
+* **Run pass exits with code 133 in `extreme` mode** — `LOW_MEMORY=extreme` adds `--single-process --in-process-gpu`, a mode Chromium officially labels unsupported; on Render's free 512 MB plan it aborts within seconds (`133` = 128 + 5 = SIGTRAP), so the 9Hits slot crash-loops (often preceded by init passes timing out with code `124`). The fix ships `LOW_MEMORY=balanced` as the default in the Dockerfile, `render.yaml`, and `.env.example`, and raises `INIT_TIMEOUT` to `600`. If you deliberately re-enable `extreme`, `start.sh`'s fast-crash detector writes `/tmp/viewer.fastcrash` when the run pass dies in under 10 s and relaunches **without** `--single-process` on the very next attempt. Existing Render services need a manual redeploy (or a Blueprint re-apply) to pick up the new env.
 * **`WATCHDOG: no output ... no CPU progress` in the logs** — the viewer wedged (typically OOM-adjacent on 512 MB instances or a stuck Chromium) and was restarted automatically. If it repeats, lower the session count, set `FEELINGSURF_ENABLED=no`, or move to a bigger instance (v6 recommends ≥ 2 GB RAM).
 * **Init pass keeps failing** (`init pass failed/timed out`) — the 9Hits API was unreachable or very slow; the supervisor retries 3× with backoff and then launches anyway (the next restart re-applies config). Increase `INIT_TIMEOUT` on very slow networks.
 * **`/dev/shm` is only 64 MB** — free Docker tiers can't set `--shm-size`. The entrypoint tries a best-effort remount; where you control Docker yourself (oracle/compose), keep `shm_size: 2g` (already in `docker-compose.yml`).
