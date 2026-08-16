@@ -1,9 +1,0 @@
-{
-  "$schema": "https://schema.zeabur.app/service.json",
-  "image": "feelingsurf/viewer:stable",
-  "port": 3000,
-  "healthCheck": {
-    "path": "/",
-    "port": 3000
-  }
-}

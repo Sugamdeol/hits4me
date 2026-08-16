@@ -48,6 +48,37 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${PORT:-10000}"
 
+# -------------------------------------------------------------------- modes
+# Two runtime modes, picked by the first positional argument:
+#
+#   (no args, the legacy default)
+#       start.sh is the container ENTRYPOINT. It starts every supervisor
+#       inline (Xvfb, 9Hits, FeelingSurf, memguard) and execs the health
+#       server in the foreground. This mode is what every deployment
+#       platform sees today; nothing about it has changed.
+#
+#   ninehits-only
+#       start.sh is the command for the 9Hits slot of the new
+#       ``supervisor.py`` process manager. In this mode it only runs the
+#       9Hits-specific chain (Xvfb, 9Hits init+run passes via run_pty.py,
+#       optional VNC) and stays alive as long as the 9Hits supervisor is
+#       alive. When the 9Hits supervisor dies, start.sh exits - the Python
+#       supervisor detects the exit, waits for the cooldown, and restarts
+#       ``start.sh ninehits-only`` from scratch. This is what lets one
+#       viewer's crash NOT take down the other one.
+#
+# Detection is intentionally simple: any first arg equal to "ninehits-only".
+# Extra args after the mode word are forwarded to the nhviewer init pass
+# (matches the legacy behaviour, so existing ``docker run ... /start.sh
+# --foo=bar`` commands keep working).
+RUN_MODE="legacy"
+case "${1:-}" in
+  ninehits-only)
+    RUN_MODE="ninehits-only"
+    shift
+    ;;
+esac
+
 NH_DIR="${NH_DIR:-/opt/9hits}"
 NH_BIN="${NH_BIN:-$NH_DIR/nhviewer}"
 NH_DISPLAY="${NH_DISPLAY:-:99}"
@@ -792,4 +823,53 @@ else
 fi
 
 log "combined health endpoint on 0.0.0.0:$PORT (GET /health)"
+
+# ---------------------------------------------------------------- ninehits-only
+# When the Python ``supervisor.py`` is in charge it runs this script as
+# ``/start.sh ninehits-only`` and the only thing that should be alive in
+# this PID namespace afterwards is the 9Hits process tree (Xvfb + 9Hits
+# supervisor + optional VNC). The script must:
+#
+#   * Exit cleanly when the 9Hits supervisor exits, so the Python
+#     supervisor can re-launch us (the per-slot crash recovery).
+#   * Forward SIGTERM to the 9Hits supervisor + Xvfb + VNC, so the
+#     container can shut down on ``docker stop``.
+#   * NOT start the FeelingSurf supervisor, the memguard, or the health
+#     server - those are independent slots owned by the Python supervisor.
+if [ "$RUN_MODE" = "ninehits-only" ]; then
+  if [ "${SUPERVISOR_PID:-0}" -le 1 ] || [ "${XVFB_SUPERVISOR_PID:-0}" -le 1 ]; then
+    log "ninehits-only mode: 9Hits is not enabled (SUPERVISOR_PID=$SUPERVISOR_PID) - exiting"
+    exit 0
+  fi
+
+  log "ninehits-only mode: waiting on 9Hits supervisor pid=$SUPERVISOR_PID (Xvfb $XVFB_SUPERVISOR_PID)"
+
+  forward_term() {
+    log "ninehits-only: forwarding signal to 9Hits supervisor and Xvfb"
+    [ "${SUPERVISOR_PID:-0}" -gt 1 ] && kill -TERM "$SUPERVISOR_PID" 2>/dev/null || true
+    [ "${XVFB_SUPERVISOR_PID:-0}" -gt 1 ] && kill -TERM "$XVFB_SUPERVISOR_PID" 2>/dev/null || true
+    [ "${VNC_SUPERVISOR_PID:-0}" -gt 1 ] && kill -TERM "$VNC_SUPERVISOR_PID" 2>/dev/null || true
+  }
+  trap 'forward_term' TERM INT HUP
+
+  # Wait for the 9Hits supervisor. `wait` is interruptible by the trap
+  # above, so a SIGTERM from the Python supervisor reaches us and we
+  # forward it to the 9Hits child. When the 9Hits child finally exits,
+  # wait returns its exit code - that becomes our exit code, so the
+  # Python supervisor sees a real non-zero code on abnormal exits and
+  # bumps the restart counter.
+  wait "$SUPERVISOR_PID"
+  nh_exit=$?
+
+  # 9Hits supervisor died; tear down its Xvfb (and optional VNC) so the
+  # process tree unwinds cleanly. The Python supervisor will spawn a
+  # fresh /start.sh ninehits-only soon.
+  log "ninehits-only: 9Hits supervisor exited (code $nh_exit) - tearing down Xvfb/VNC"
+  [ "${XVFB_SUPERVISOR_PID:-0}" -gt 1 ] && kill -TERM "$XVFB_SUPERVISOR_PID" 2>/dev/null || true
+  [ "${VNC_SUPERVISOR_PID:-0}" -gt 1 ] && kill -TERM "$VNC_SUPERVISOR_PID" 2>/dev/null || true
+  # Brief grace for the children to die on their own.
+  sleep 2 & wait $!
+  exit "$nh_exit"
+fi
+
 exec python3 "$SCRIPT_DIR/health_server.py"
