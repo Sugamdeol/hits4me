@@ -26,12 +26,33 @@ services:
     env:
       - key: PORT
         value: "10000"
+      # 9Hits access key (hard-coded) + FeelingSurf token.
       - key: ACCESS_KEY
-        value: ""
+        value: "23f9097a8d823267188c49b3cc0598b1"
       - key: ACCESS_TOKEN
-        value: ""
+        value: "27f77ef00e768cdbdc7352f3456e35b5"
+      # Koyeb nano = 512 MB. LOW_MEMORY=extreme (both viewers single-process,
+      # measured ~324 MB pair) + DUAL_VIEWER_MODE=concurrent = BOTH viewers at
+      # the same time. memguard acts at 97% of the budget as the safety valve;
+      # crash auto-fallback drops single-process if a viewer crash-loops.
+      - key: NINEHITS_ENABLED
+        value: "yes"
       - key: FEELINGSURF_ENABLED
         value: "yes"
+      - key: DUAL_VIEWER_MODE
+        value: "concurrent"
+      - key: LOW_MEMORY
+        value: "extreme"
+      - key: NH_SP
+        value: "yes"
+      - key: FS_SP
+        value: "yes"
+      - key: FS_GL_MODE
+        value: "swiftshader"
+      - key: MEMGUARD_LIMIT_MB
+        value: "512"
+      - key: MEMGUARD_HARD_PCT
+        value: "97"
       - key: CLEAR_ALL_SESSIONS
         value: "yes"
       - key: SYSTEM_SESSION
