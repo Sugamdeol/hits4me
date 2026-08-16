@@ -28,6 +28,10 @@ services:
         value: "10000"
       - key: ACCESS_KEY
         value: ""
+      - key: ACCESS_TOKEN
+        value: ""
+      - key: FEELINGSURF_ENABLED
+        value: "yes"
       - key: CLEAR_ALL_SESSIONS
         value: "yes"
       - key: SYSTEM_SESSION
