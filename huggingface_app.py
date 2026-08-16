@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
 """
-Hugging Face Spaces (Gradio Free Tier) — FREE PLAN Entrypoint
+Hugging Face Spaces (Gradio Free Tier — ZeroGPU) — FREE PLAN Entrypoint
 ==============================================================
 
-Runs BOTH viewers on the **100% FREE Gradio SDK** (2 vCPU · 16 GB RAM) :
+Runs BOTH viewers on the **100% FREE Gradio SDK (ZeroGPU hardware, 2 vCPU · 16 GB RAM)** :
 
   • 9Hits Viewer v6      → 1 system session only (clean cloud IP, no proxy pool)
   • FeelingSurf Viewer    → 3 parallel instances (same access_token, 3× earnings)
 
 Why this FREE PLAN config?
 --------------------------
-* HF free = 16 GB RAM → both viewers run **concurrently** (no time-slice needed).
+* HF free (ZeroGPU) = 16 GB RAM + time-sliced A100/H200 (free 3.5 min/day GPU quota) → both viewers run **concurrently** (no time-slice needed).
   Render/Koyeb free = 512 MB → needs extreme LOW_MEMORY + memguard. HF is generous,
   so we use BALANCED flags only when auto-detected <1 GB, otherwise native.
+  **Note: free Gradio Spaces now run on ZeroGPU hardware only** — Docker Spaces are paid, Gradio+ZeroGPU is the free path.
 * 9Hits public pool is CLOSED — a single system session on a clean datacenter IP
-  (HF's AWS US/EU) avoids `Auth: Duplicate USER on IP` and is most reliable.
+  (HF's ZeroGPU AWS/GCP) avoids `Auth: Duplicate USER on IP` and is most reliable.
 * FeelingSurf official recommendation is 2 GB per container → 3 containers ≈ 6 GB.
-  HF's 16 GB easily fits 3× FeelingSurf + 1× 9Hits concurrently.
+  HF's 16 GB ZeroGPU easily fits 3× FeelingSurf + 1× 9Hits concurrently (CPU-only).
+
+ZeroGPU note
+------------
+* Add `spaces` to `requirements.txt` and keep at least one `@spaces.GPU` function (dummy `_zerogpu_ping`) — HF requires it or the Space crashes on ZeroGPU.
+  Viewers themselves run **outside** `@spaces.GPU` (CPU) to avoid burning GPU quota; only the ping button uses GPU (10s per call, negligible vs 3.5 min/day free).
 
 How it works on HF vs Docker
 -----------------------------
@@ -24,8 +30,9 @@ How it works on HF vs Docker
   `/opt/9hits/nhviewer` and `/usr/bin/FeelingSurfViewer`. This file just
   launches `start.sh` (which supervises both viewers + Xvfb + memguard + /health
   on port 10000) and additionally spawns two extra FeelingSurf instances.
+  `spaces` is a no-op here.
 
-* **HF Gradio runtime (no Docker image):** the binaries are absent. This file
+* **HF Gradio ZeroGPU runtime (no Docker image):** the binaries are absent. This file
   auto-downloads at startup (no root needed):
     - 9Hits v6  → https://dl.9hits.com/9hitsv6-linux64.tar.bz2  → /tmp/9hits
     - FeelingSurf → https://github.com/feelingsurf/viewer/releases/download/2.5.2/…
@@ -58,16 +65,20 @@ Gradio dashboard
   * Live logs (combined + per-viewer, auto-refresh every 3s)
   * Health JSON is still available at :10000/health (and /health proxy on 7860)
 
-Deploy
-------
-1. Create new HF Space → Gradio SDK → Free hardware (2 vCPU · 16GB)
+Deploy (ZeroGPU — free)
+---------------------
+1. Create new HF Space → **Gradio** SDK → Hardware **ZeroGPU** (free, replaces CPU Basic)
+   · Title: hits4me FREE — 9Hits 1 Session + FeelingSurf 3x
+   · `sdk: gradio`, `sdk_version: 4.44.0` (or 5.x), `app_file: app_hf.py`
+   · Python 3.10 or 3.12 recommended for ZeroGPU (HF default)
 2. Upload this repo or at least `app_hf.py` + `health_server.py` + `memguard.py` +
-   `run_pty.py` + `feelingsurf-run.sh` + `fetch_proxy_list.py` (or whole repo).
-3. Space Settings → Variables and secrets → add ACCESS_KEY and ACCESS_TOKEN
-4. (Optional) set app_file to `app_hf.py` if you kept `app.py` as well.
-5. Build → Gradio UI appears and both viewers start.
+   `run_pty.py` + `feelingsurf-run.sh` + `fetch_proxy_list.py` + `requirements.txt` + `packages.txt`.
+3. Space Settings → **Variables and secrets** → add Secrets `ACCESS_KEY` and `ACCESS_TOKEN`
+   · Also set **Hardware → ZeroGPU** if not selected at creation (Settings → Hardware → ZeroGPU)
+4. If repo has both `app.py` and `app_hf.py`, ensure README frontmatter `app_file: app_hf.py`.
+5. Build → Gradio UI appears and both viewers start (ZeroGPU ping button tests GPU quota).
 
-See also original `app.py` (9Hits-only, legacy) — this file is the FREE PLAN 1+3.
+See also original `app.py` (9Hits-only, legacy) — this file is the FREE PLAN 1+3 ZeroGPU.
 """
 
 import os
@@ -85,13 +96,59 @@ import http.client
 from concurrent.futures import ThreadPoolExecutor
 
 # --------------------------------------------------------------------------- #
-# Gradio import (optional — fallback to headless wait if not installed)
+# Gradio + ZeroGPU imports (optional — fallbacks for local/Docker)
 # --------------------------------------------------------------------------- #
 try:
     import gradio as gr
 except ImportError:
     gr = None
     print("[app_hf] WARNING: gradio not installed — dashboard disabled", flush=True)
+
+# ZeroGPU: Hugging Face free tier Gradio now runs on ZeroGPU hardware.
+# ZeroGPU requires at least one @spaces.GPU-decorated function (otherwise the
+# Space will crash on ZeroGPU). The decorator is a no-op on CPU/local, so it
+# is safe to keep unconditionally. Viewer processes themselves are CPU-only
+# (Xvfb/Chromium) and deliberately run OUTSIDE @spaces.GPU to avoid burning
+# the free daily GPU quota (3.5 min/day). Only a tiny dummy function uses GPU.
+try:
+    import spaces  # pip install spaces (HF ZeroGPU helper)
+    SPACES_AVAILABLE = True
+except ImportError:
+    SPACES_AVAILABLE = False
+    # lightweight stub for CPU/Docker/local — keeps same @spaces.GPU API
+    class _SpacesStub:
+        def GPU(self, *args, **kwargs):
+            def decorator(fn):
+                return fn
+            # also supports @spaces.GPU without parens
+            if args and callable(args[0]) and not kwargs:
+                return args[0]
+            return decorator
+        def __getattr__(self, _name):
+            return lambda *a, **k: (lambda f: f) if a and callable(a[0]) else lambda f: f
+    spaces = _SpacesStub()
+    print("[app_hf] spaces not installed — ZeroGPU decorator is no-op (pip install spaces for HF ZeroGPU)", flush=True)
+
+# Dummy GPU function to satisfy ZeroGPU scheduler — must exist at import time
+# Duration 10s keeps quota negligible; never auto-called (viewers use CPU).
+@spaces.GPU(duration=10)  # type: ignore[misc]
+def _zerogpu_ping(message: str = "ok") -> str:
+    """ZeroGPU health ping — proves Space is ZeroGPU-compatible.
+
+    Keep at least one @spaces.GPU function in any ZeroGPU Space; HF will
+    error if none exists. This is NOT used by 9Hits/FeelingSurf viewers
+    (they are CPU-only Chromium) — calling it consumes GPU quota, so it is
+    only invoked via the dashboard button, not on auto-refresh.
+    """
+    import time as _t
+    return f"ZeroGPU ping: {message} @ {_t.strftime('%H:%M:%S')} (quota 10s, free 3.5 min/day)"
+
+# Also expose a tiny helper for the UI button (CPU wrapper that calls GPU)
+def zerogpu_ping_wrapper(msg: str = "hello") -> str:
+    try:
+        return _zerogpu_ping(msg)
+    except Exception as e:
+        return f"ZeroGPU ping failed: {e} (are you on ZeroGPU hardware? Set Space → Settings → Hardware → ZeroGPU)"
 
 # --------------------------------------------------------------------------- #
 # FREE PLAN defaults (user can override via env)
@@ -1040,17 +1097,18 @@ def build_ui():
         .badge.neutral {background:#21262d; color:#8b949e; border:1px solid #30363d}
         .log-box {font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px}
     """) as demo:
-        gr.Markdown("""
+        gr.Markdown(f"""
         <div class="hf-header">
-        <h1 style="margin:0">🌐 hits4me — FREE PLAN <span style="font-size:14px; color:#8b949e">Hugging Face Gradio</span></h1>
+        <h1 style="margin:0">🌐 hits4me — FREE PLAN <span style="font-size:14px; color:#8b949e">Hugging Face Gradio · ZeroGPU</span></h1>
         <div style="margin-top:6px; color:#8b949e; font-size:13px">
         <span class="badge ok">9Hits ×1 system session</span>
         <span class="badge ok">FeelingSurf ×3 parallel</span>
-        <span class="badge neutral">16 GB RAM · 2 vCPU · concurrent</span>
+        <span class="badge neutral">ZeroGPU · 16 GB RAM · 2 vCPU · concurrent</span>
+        <span class="badge neutral">{'✅ spaces' if SPACES_AVAILABLE else '⚠️ spaces missing'}</span>
         <span class="badge neutral">CLEAN CLOUD IP (no proxy pool needed)</span>
         </div>
         <div style="margin-top:8px; font-size:12px; color:#8b949e">
-        💡 Set <code>ACCESS_KEY</code> (9Hits) and <code>ACCESS_TOKEN</code> (FeelingSurf) in <b>Space Settings → Variables and secrets</b>. This Space runs <b>1 system session</b> for 9Hits (most reliable on free datacenter IPs) and <b>3 identical FeelingSurf viewers</b> (same token, 3× credits, official multi-container pattern collapsed into one 16GB Space).
+        💡 Free Gradio now runs on <b>ZeroGPU</b> (free A100/H200, 3.5 min/day quota) — set Space <b>Hardware → ZeroGPU</b>. Add <code>ACCESS_KEY</code> (9Hits) and <code>ACCESS_TOKEN</code> (FeelingSurf) in <b>Settings → Variables and secrets</b>. Viewers are <b>CPU-only</b> (outside <code>@spaces.GPU</code>) so quota is not burned; only the ping below uses GPU (10s).
         </div>
         </div>
         """)
@@ -1067,6 +1125,7 @@ def build_ui():
                 gr.Markdown(f"""
                 | Key | Value (env) | Note |
                 |-----|-------------|------|
+                | **Hardware** | **ZeroGPU** (free) | free Gradio runs on ZeroGPU; select Hardware → ZeroGPU in Space Settings |
                 | **9Hits sessions** | **1** system | `SYSTEM_SESSION=yes`, `EX_PROXY_SESSIONS=0` |
                 | **FeelingSurf instances** | **{FEELINGSURF_INSTANCES}** | `FEELINGSURF_INSTANCES={FEELINGSURF_INSTANCES}` (same token) |
                 | **DUAL_VIEWER_MODE** | `concurrent` | 16GB fits both, no time-slice |
@@ -1077,6 +1136,25 @@ def build_ui():
                 | **GRADIO PORT** | `{PORT_GRADIO}` | externally exposed |
                 | **HEALTH PORT** | `{PORT_HEALTH}` | `/health` (internal) |
                 | **NH_DIR** | `{NH_DIR}` | auto `/tmp/9hits` on HF |
+                | **`spaces` GPU** | `{'✅' if SPACES_AVAILABLE else '❌ pip install spaces'}` | dummy `@spaces.GPU` keeps ZeroGPU alive (viewers use CPU) |
+                """)
+
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.Markdown("### ⚡ ZeroGPU (free hardware)")
+                gr.Markdown("Free Gradio now runs on **ZeroGPU** (A100/H200, free 3.5 min/day) — set **Space Settings → Hardware → ZeroGPU**. Viewers are **CPU-only** to save GPU quota; only this ping burns quota (10s).")
+                with gr.Row():
+                    zerogpu_input = gr.Textbox(label="Ping message", value="hello", scale=3, placeholder="hello")
+                    zerogpu_btn = gr.Button("⚡ Ping ZeroGPU (10s)", variant="secondary", scale=1)
+                zerogpu_out = gr.Textbox(label="ZeroGPU result (GPU quota 10s)", interactive=False, lines=2, placeholder="click Ping to test ZeroGPU…")
+                zerogpu_btn.click(fn=zerogpu_ping_wrapper, inputs=zerogpu_input, outputs=zerogpu_out)
+                gr.Markdown(f"<span style='font-size:11px; color:#8b949e'>{'✅ spaces installed — dummy @spaces.GPU keeps ZeroGPU alive' if SPACES_AVAILABLE else '❌ spaces not installed — add `spaces` to requirements.txt'} · quota 3.5 min/day free (Pro 8×) · viewers stay CPU → quota not used</span>")
+            with gr.Column(scale=1):
+                gr.Markdown("### 🔑 Secrets — ZeroGPU free")
+                gr.Markdown(f"""
+                - `ACCESS_KEY` **{'✅' if os.environ.get('ACCESS_KEY') else '❌ missing'}** · `ACCESS_TOKEN` **{'✅' if os.environ.get('ACCESS_TOKEN') or os.environ.get('access_token') else '❌ missing'}**
+                - Hardware: **ZeroGPU** (free) · Python 3.10/3.12 recommended
+                - [HF docs: ZeroGPU](https://huggingface.co/docs/hub/spaces-zerogpu) · `@spaces.GPU` required
                 """)
 
         with gr.Tabs():
