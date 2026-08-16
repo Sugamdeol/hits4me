@@ -1,7 +1,10 @@
-# One Render service/container running both 9Hits and FeelingSurf.
+# Updates the existing 9hits-viewer Render service so one container runs
+# both 9Hits and FeelingSurf. Do not rename this service — a different
+# Blueprint name would create a second deployment instead of updating
+# https://dashboard.render.com/web/srv-da09a7dbedkc73a829cg
 services:
   - type: web
-    name: hits4me-viewers
+    name: 9hits-viewer
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free

@@ -74,8 +74,10 @@ Each provider assigns an isolated, clean datacenter outbound IP address:
 ---
 
 ### 3. Render (100% Free Docker Web Service)
-1. In [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** (connect this repo).
-2. Or create **New → Web Service** → Docker runtime → Free tier.
+The existing **`9hits-viewer`** web service ([dashboard](https://dashboard.render.com/web/srv-da09a7dbedkc73a829cg)) runs **both** the 9Hits and FeelingSurf viewers in one Docker container. Applying this repo's Blueprint updates that same service. It does **not** create a new Render service named `hits4me-viewers`.
+
+1. In [Render Dashboard](https://dashboard.render.com/) apply the Blueprint for this repo so it updates the existing **`9hits-viewer`** service (or open that service and redeploy).
+2. Or, only if `9hits-viewer` does not already exist, create **New → Web Service** → Docker runtime → Free tier and name it exactly `9hits-viewer`.
 3. Paste `ACCESS_KEY` when prompted. `ACCESS_TOKEN` is preconfigured in `render.yaml`.
 4. Set Environment Variables:
    ```env
@@ -161,7 +163,7 @@ The combined repository `Dockerfile` is used on cloud platforms. Configure both 
 | Platform | Deployment | Notes |
 | :--- | :--- | :--- |
 | **Oracle Cloud Always Free** | use `docker compose up -d` | One combined service; the 24 GB tier has ample memory. |
-| **Render** | Blueprint (`render.yaml`) deploys one **hits4me-viewers** web service containing both viewers. `ACCESS_KEY` is prompted and `ACCESS_TOKEN` is preconfigured. | The free 512 MB plan is unlikely to have enough RAM; use a plan with at least 4 GB. |
+| **Render** | Blueprint (`render.yaml`) updates the existing **`9hits-viewer`** web service so it runs both viewers. `ACCESS_KEY` is prompted and `ACCESS_TOKEN` is preconfigured. | The free 512 MB plan is unlikely to have enough RAM; use a plan with at least 4 GB. |
 | **Koyeb** | Deploy this repository Dockerfile and set both secrets. | Uses `koyeb.yaml`; one service runs both viewers. |
 | **Fly.io** | Deploy this repository Dockerfile and set both secrets. | Uses `fly.toml`; one service runs both viewers. |
 | **Railway** | Deploy this repository Dockerfile and set both secrets. | Uses `railway.json`; one service runs both viewers. |
