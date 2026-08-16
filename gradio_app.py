@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-Hugging Face Spaces (Gradio Free Tier — ZeroGPU) — FREE PLAN Entrypoint
+Hugging Face Spaces (regular Gradio runtime) — native viewer entrypoint
 ==============================================================
 
-Runs BOTH viewers on the **100% FREE Gradio SDK (ZeroGPU hardware, 2 vCPU · 16 GB RAM)** :
+Runs BOTH viewers as regular child processes in a Hugging Face Gradio Space (2 vCPU · 16 GB RAM):
 
   • 9Hits Viewer v6      → 1 system session only (clean cloud IP, no proxy pool)
   • FeelingSurf Viewer    → 3 parallel instances (same access_token, 3× earnings)
 
 Why this FREE PLAN config?
 --------------------------
-* HF free (ZeroGPU) = 16 GB RAM + time-sliced A100/H200 (free 3.5 min/day GPU quota) → both viewers run **concurrently** (no time-slice needed).
-  Render/Koyeb free = 512 MB → needs extreme LOW_MEMORY + memguard. HF is generous,
-  so we use BALANCED flags only when auto-detected <1 GB, otherwise native.
-  **Note: free Gradio Spaces now run on ZeroGPU hardware only** — Docker Spaces are paid, Gradio+ZeroGPU is the free path.
+* Hugging Face provides enough memory for the viewers to run natively. This entrypoint
+  deliberately disables memory trimming, time-slicing, and the memory guardian; the
+  viewers receive their normal upstream arguments. An optional ZeroGPU ping remains
+  available for Spaces that expose ZeroGPU, but the viewers never run inside it.
 * 9Hits public pool is CLOSED — a single system session on a clean datacenter IP
-  (HF's ZeroGPU AWS/GCP) avoids `Auth: Duplicate USER on IP` and is most reliable.
+  (HF's isolated cloud IP) avoids `Auth: Duplicate USER on IP` and is most reliable.
 * FeelingSurf official recommendation is 2 GB per container → 3 containers ≈ 6 GB.
-  HF's 16 GB ZeroGPU easily fits 3× FeelingSurf + 1× 9Hits concurrently (CPU-only).
+  HF's 16 GB runtime easily fits 3× FeelingSurf + 1× 9Hits concurrently (CPU-only).
 
 ZeroGPU note
 ------------
@@ -28,11 +28,12 @@ How it works on HF vs Docker
 -----------------------------
 * **Docker (local / Koyeb / Render / Fly) :** the image already contains
   `/opt/9hits/nhviewer` and `/usr/bin/FeelingSurfViewer`. This file just
-  launches `start.sh` (which supervises both viewers + Xvfb + memguard + /health
-  on port 10000) and additionally spawns two extra FeelingSurf instances.
+  launches `start.sh` for the 9Hits viewer and additionally spawns two extra
+  FeelingSurf instances. The HF entrypoint forces native mode, so `start.sh`
+  does not start its small-host memory guardian.
   `spaces` is a no-op here.
 
-* **HF Gradio ZeroGPU runtime (no Docker image):** the binaries are absent. This file
+* **HF Gradio runtime (no Docker image):** the binaries are absent. This file
   auto-downloads at startup (no root needed):
     - 9Hits v6  → https://dl.9hits.com/9hitsv6-linux64.tar.bz2  → /tmp/9hits
     - FeelingSurf → https://github.com/feelingsurf/viewer/releases/download/2.5.2/…
@@ -42,9 +43,8 @@ How it works on HF vs Docker
 
 Environment (set via HF Space → Settings → Variables and secrets)
 -----------------------------------------------------------------
-Required secrets:
-  ACCESS_KEY   = your 9Hits 32-char hex key        (Variables and secrets → Secret)
-  ACCESS_TOKEN / access_token = your FeelingSurf token (Secret)
+Credentials are preconfigured below for this Space. Environment variables
+with the same names still override the built-in values when supplied.
 
 All others have FREE PLAN defaults below; override only if you know why:
 
@@ -52,7 +52,7 @@ All others have FREE PLAN defaults below; override only if you know why:
   FEELINGSURF_INSTANCES=3   (this file's extra knob, default 3)
   SYSTEM_SESSION=yes   CLEAR_ALL_SESSIONS=yes   EX_PROXY_SESSIONS=0
   SESSION_NOTE=hf-free-system   NOTE=hf-free
-  DUAL_VIEWER_MODE=concurrent   LOW_MEMORY=auto   MEMGUARD_LIMIT_MB=0 (auto)
+  DUAL_VIEWER_MODE=off   LOW_MEMORY=off   (native HF mode; no memory guardian)
   RESET_INTERVAL=2h   CACHE_LIMIT=0   HIDE_BROWSER=yes
   NH_DISPLAY=:99   FEELINGSURF_DISPLAY=:98 etc
   PORT=7860 (Gradio)  HEALTH_PORT=10000 (combined /health)
@@ -65,20 +65,21 @@ Gradio dashboard
   * Live logs (combined + per-viewer, auto-refresh every 3s)
   * Health JSON is still available at :10000/health (and /health proxy on 7860)
 
-Deploy (ZeroGPU — free)
+Deploy (standard HF Gradio)
 ---------------------
-1. Create new HF Space → **Gradio** SDK → Hardware **ZeroGPU** (free, replaces CPU Basic)
-   · Title: hits4me FREE — 9Hits 1 Session + FeelingSurf 3x
+1. Create a new HF Space with the **Gradio** SDK (CPU Basic or any larger
+   hardware; ZeroGPU is optional)
+   · Title: hits4me — 9Hits 1 Session + FeelingSurf 3x
    · `sdk: gradio`, `sdk_version: 4.44.0` (or 5.x), `app_file: app_hf.py`
-   · Python 3.10 or 3.12 recommended for ZeroGPU (HF default)
-2. Upload this repo or at least `app_hf.py` + `health_server.py` + `memguard.py` +
+   · Python 3.10 or 3.12
+2. Upload this repo or at least `app_hf.py` + `health_server.py` +
    `run_pty.py` + `feelingsurf-run.sh` + `fetch_proxy_list.py` + `requirements.txt` + `packages.txt`.
-3. Space Settings → **Variables and secrets** → add Secrets `ACCESS_KEY` and `ACCESS_TOKEN`
-   · Also set **Hardware → ZeroGPU** if not selected at creation (Settings → Hardware → ZeroGPU)
+3. The built-in credentials are used automatically. Optional Space variables
+   `ACCESS_KEY` and `ACCESS_TOKEN` override them without a code change.
 4. If repo has both `app.py` and `app_hf.py`, ensure README frontmatter `app_file: app_hf.py`.
-5. Build → Gradio UI appears and both viewers start (ZeroGPU ping button tests GPU quota).
+5. Build → Gradio UI appears and both viewers start. The optional ZeroGPU ping can be ignored on CPU hardware.
 
-See also original `app.py` (9Hits-only, legacy) — this file is the FREE PLAN 1+3 ZeroGPU.
+See also `app.py`, which imports this file as a compatibility entrypoint.
 """
 
 import os
@@ -181,8 +182,11 @@ FREE_DEFAULTS = {
     "CACHE_LIMIT": "0",
     "RESET_INTERVAL": "2h",
     "SUPERVISOR_DELAY": "10",
-    "DUAL_VIEWER_MODE": "concurrent",  # 16GB → no need to time-slice
-    "LOW_MEMORY": "auto",               # auto → off on 16GB, balanced on <1GB
+    # HF has enough memory: keep the viewers in normal native mode. `off` is
+    # also important for the Docker-like fallback because start.sh uses it to
+    # skip its small-host memory guardian and time-slice scheduler.
+    "DUAL_VIEWER_MODE": "off",
+    "LOW_MEMORY": "off",
     "TIME_SLICE": "1500",
     "NH_DISPLAY": ":99",
     "FEELINGSURF_DISPLAY": ":98",
@@ -190,7 +194,7 @@ FREE_DEFAULTS = {
     "INIT_TIMEOUT": "300",
     "NH_WATCHDOG": "yes",
     "NH_WATCHDOG_STUCK": "600",
-    "FS_SP": "yes",
+    "FS_SP": "no",
     "FS_GL_MODE": "swiftshader",
     "FS_SHARE_DISPLAY": "no",  # each FeelingSurf gets its own Xvfb (3×)
     "DEFAULT_DL": "https://dl.9hits.com/9hitsv6-linux64.tar.bz2",
@@ -198,6 +202,29 @@ FREE_DEFAULTS = {
 for k, v in FREE_DEFAULTS.items():
     if not os.environ.get(k):
         os.environ[k] = v
+
+# --------------------------------------------------------------------------- #
+# HF credentials
+# --------------------------------------------------------------------------- #
+# The requested HF deployment is self-contained. These are the credentials
+# already used by the repository's deployment manifests. A Space variable can
+# still override either value without requiring another code change. Never log
+# the values themselves.
+HF_ACCESS_KEY = '23f9097a8d823267188c49b3cc0598b1'
+HF_ACCESS_TOKEN = '27f77ef00e768cdbdc7352f3456e35b5'
+
+if not os.environ.get("ACCESS_KEY"):
+    os.environ["ACCESS_KEY"] = HF_ACCESS_KEY
+_access_token = os.environ.get("ACCESS_TOKEN") or os.environ.get("access_token") or HF_ACCESS_TOKEN
+os.environ["ACCESS_TOKEN"] = _access_token
+os.environ["access_token"] = _access_token
+
+# This entrypoint is intentionally native. Do not inherit small-host settings
+# from an old Space configuration and accidentally start a guardian/scheduler.
+os.environ["DUAL_VIEWER_MODE"] = "off"
+os.environ["LOW_MEMORY"] = "off"
+os.environ["FS_SP"] = "no"
+os.environ["FS_MEM_FLAGS"] = ""
 
 # NH paths — on HF we cannot write to /opt, so use /tmp/9hits
 if not os.environ.get("NH_DIR"):
@@ -298,7 +325,79 @@ def detect_mem_limit_mb():
     return 0
 
 MEM_LIMIT_MB = detect_mem_limit_mb()
-log("setup", f"Detected memory limit ~{MEM_LIMIT_MB} MB — free plan concurrent mode")
+
+# The dashboard reports ordinary process RSS for visibility only. It never
+# takes action based on this value and does not need a sidecar/guardian.
+MEMORY_PEAK_MB = 0.0
+
+
+def _proc_parent_map():
+    """Return a best-effort parent -> children map from /proc."""
+    children = {}
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return children
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as fh:
+                raw = fh.read()
+            # The comm field can contain spaces and parentheses. Everything
+            # after its final ')' starts with state, then ppid.
+            right = raw.rfind(b")")
+            fields = raw[right + 2 :].split()
+            parent = int(fields[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(parent, []).append(pid)
+    return children
+
+
+def _process_tree(root_pid):
+    """Return root_pid and all descendants visible to this process."""
+    if root_pid <= 1:
+        return set()
+    children = _proc_parent_map()
+    result = set()
+    pending = [root_pid]
+    while pending:
+        pid = pending.pop()
+        if pid in result:
+            continue
+        result.add(pid)
+        pending.extend(children.get(pid, ()))
+    return result
+
+
+def _rss_mb(pid):
+    try:
+        with open(f"/proc/{pid}/status", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024.0
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0.0
+
+
+def _process_tree_rss_mb(root_pid):
+    if root_pid <= 1:
+        return None
+    pids = _process_tree(root_pid)
+    if not pids:
+        return None
+    return round(sum(_rss_mb(pid) for pid in pids), 1)
+
+
+def _safe_process_rss(pid):
+    if pid <= 1 or not _pid_alive(pid):
+        return None
+    return _process_tree_rss_mb(pid)
+
+log("setup", f"Detected memory limit ~{MEM_LIMIT_MB} MB — native HF mode")
 
 # --------------------------------------------------------------------------- #
 # Ensure viewers are present (download for HF Gradio runtime)
@@ -658,14 +757,16 @@ def launch_9hits():
     # Don't set proxy sessions — keep 0
     # Hide browser yes for headless
     env["HIDE_BROWSER"] = env.get("HIDE_BROWSER", "yes")
-    env["LOW_MEMORY"] = env.get("LOW_MEMORY", "auto")
-    env["DUAL_VIEWER_MODE"] = env.get("DUAL_VIEWER_MODE", "concurrent")
+    # HF has ample RAM: always use normal viewer arguments and never start
+    # start.sh's small-host guardian/scheduler in the Docker fallback.
+    env["LOW_MEMORY"] = "off"
+    env["DUAL_VIEWER_MODE"] = "off"
     # Make sure reset interval set
     if not env.get("RESET_INTERVAL"):
         env["RESET_INTERVAL"] = "2h"
 
     if use_start_sh and os.path.exists("/usr/bin/Xvfb"):
-        # Use start.sh as supervisor (it will handle Xvfb, memguard, health)
+        # Use start.sh as supervisor for the baked Docker viewer (native mode).
         # But we need to run it without exec-ing health_server on same PORT? It will run health on PORT_HEALTH
         # We run it in a thread via run_process_with_logs
         log("9hits", f"Using start.sh supervisor (Docker mode) — NH_DIR={NH_DIR}")
@@ -695,8 +796,9 @@ def launch_9hits():
                         try:
                             os.remove(p)
                         except: pass
-                    log("9hits", f"Starting Xvfb {display} 1280x720x24")
-                    proc = subprocess.Popen(["Xvfb", display, "-screen", "0", "1280x720x24", "-nolisten", "tcp"])
+                    resolution = env.get("NH_RESOLUTION", "1920x1080x24")
+                    log("9hits", f"Starting Xvfb {display} {resolution}")
+                    proc = subprocess.Popen(["Xvfb", display, "-screen", "0", resolution, "-nolisten", "tcp"])
                     # write pid
                     pathlib.Path("/tmp/xvfb.pid").write_text(str(proc.pid))
                     proc.wait()
@@ -710,32 +812,6 @@ def launch_9hits():
             if os.path.exists(f"/tmp/.X11-unix/X{display.lstrip(':').split('.')[0]}"):
                 break
             time.sleep(1)
-        # Also start memguard if present (for memory stats)
-        try:
-            memguard_py = os.path.join(os.path.dirname(__file__), "memguard.py")
-            if not os.path.exists(memguard_py):
-                memguard_py = "/memguard.py"
-            if os.path.exists(memguard_py):
-                env_mg = env.copy()
-                # memguard expects DUAL_VIEWER_MODE etc
-                subprocess.Popen(["python3", memguard_py], env=env_mg)
-                log("9hits", f"memguard started ({memguard_py})")
-        except Exception as e:
-            log("9hits", f"memguard failed: {e}")
-        # Also start health_server on PORT_HEALTH
-        try:
-            health_py = os.path.join(os.path.dirname(__file__), "health_server.py")
-            if not os.path.exists(health_py):
-                health_py = "/health_server.py"
-            if os.path.exists(health_py):
-                env_h = env.copy()
-                env_h["PORT"] = str(PORT_HEALTH)
-                env_h["SUPERVISOR_PID"] = str(os.getpid())
-                subprocess.Popen(["python3", health_py], env=env_h)
-                log("health", f"health_server started on :{PORT_HEALTH}")
-        except Exception as e:
-            log("health", f"health_server failed: {e}")
-
         # Build nhviewer args
         while True:
             args = []
@@ -790,12 +866,17 @@ def launch_9hits():
             # EXTRA_ARGS
             if env.get("EXTRA_ARGS"):
                 args.extend(env["EXTRA_ARGS"].split())
-            # Init pass first
+            # Init pass first. Redact the built-in key from logs; the viewer
+            # still receives the real argument below.
             display_env = env.copy()
             display_env["DISPLAY"] = display
+            safe_args = [
+                "--access-key=****" if item.startswith("--access-key=") else item
+                for item in args[:3]
+            ]
             # init pass
             try:
-                log("9hits", f"Init pass: nhviewer {' '.join(args[:3])}... --exit-on-init")
+                log("9hits", f"Init pass: nhviewer {' '.join(safe_args)}... --exit-on-init")
                 init_cmd = [NH_BIN] + args + ["--exit-on-init"]
                 # bounded by INIT_TIMEOUT
                 timeout = int(env.get("INIT_TIMEOUT", "300"))
@@ -870,7 +951,7 @@ def launch_feelingsurf_instance(idx):
     env["DISPLAY"] = disp  # for direct launch
     env["healthcheck_port"] = str(port)
     env["access_token"] = env.get("access_token", env.get("ACCESS_TOKEN", ""))
-    env["FS_RESOLUTION"] = env.get("FS_RESOLUTION", "1280x720x24" if MEM_LIMIT_MB and MEM_LIMIT_MB < 2048 else "1920x1080x24")
+    env["FS_RESOLUTION"] = env.get("FS_RESOLUTION", "1920x1080x24")
     env["FS_SHARE_DISPLAY"] = "no"
     # Ensure FS binary
     # Wait for binary
@@ -913,7 +994,7 @@ def launch_feelingsurf_instance(idx):
         # run_sh internally will start Xvfb on disp and then FeelingSurfViewer
         # We need to ensure FS_MEM_FLAGS etc are passed
         # Mimic start.sh's FS_MEM_FLAGS handling
-        # For 16GB, LOW_MEMORY auto → off, so no mem flags, but we can set anyway
+        # Native HF mode leaves the viewer flags untouched.
         # We'll just run via supervisor loop
         cmd = ["/bin/bash", run_sh]
         log(log_key, f"Launching via {run_sh} on {disp} port {port} (bin={fs_bin})")
@@ -1004,74 +1085,88 @@ def get_9hits_status():
     state = "unknown"
     try:
         state = pathlib.Path("/tmp/viewer.state").read_text().strip() or "unknown"
-    except: pass
+    except OSError:
+        pass
     restarts = _read_int("/tmp/viewer.restarts", 0)
     silent = None
     try:
         silent = int(time.time() - pathlib.Path("/tmp/viewer.lastoutput").stat().st_mtime)
-    except: pass
-    # memory via memguard.json
-    nh_rss = None
-    try:
-        with open("/tmp/memguard.json") as fh:
-            j = json.load(fh)
-            nh_rss = j.get("ninehits_rss_mb")
-    except: pass
+    except OSError:
+        pass
     return {
         "alive": alive,
         "pid": pid if alive else 0,
         "phase": state,
         "restarts": restarts,
         "silent": silent,
-        "rss": nh_rss,
+        "rss": _safe_process_rss(pid),
     }
+
 
 def get_feelingsurf_status(idx):
     pid = _read_int(f"/tmp/feelingsurf-{idx}.pid")
     if pid == 0:
         pid = _read_int("/tmp/feelingsurf.pid") if idx == 1 else 0
     alive = _pid_alive(pid)
-    # check http health for idx 1 (port 3000) else just pid
+    # Check HTTP health for instance 1; the other instances are represented by
+    # their managed process because they use separate ports/displays.
     http_ok = None
     if alive and idx == 1:
         try:
-            conn = http.client.HTTPConnection("127.0.0.1", 3000 + (idx-1), timeout=1)
+            conn = http.client.HTTPConnection("127.0.0.1", 3000 + (idx - 1), timeout=1)
             conn.request("HEAD", "/")
-            r = conn.getresponse()
-            http_ok = r.status < 500
+            response = conn.getresponse()
+            http_ok = response.status < 500
             conn.close()
-        except:
+        except (OSError, http.client.HTTPException):
             http_ok = False
     restarts = _read_int(f"/tmp/feelingsurf-{idx}.restarts", 0)
     if idx == 1 and restarts == 0:
         restarts = _read_int("/tmp/feelingsurf.restarts", 0)
-    # rss
-    fs_rss = None
-    try:
-        with open("/tmp/memguard.json") as fh:
-            j = json.load(fh)
-            # memguard reports combined FS rss, not per-instance
-            # For display, divide by instances if needed
-            total = j.get("feelingsurf_rss_mb")
-            if total is not None:
-                # rough per-instance
-                fs_rss = round(total / FEELINGSURF_INSTANCES, 1) if FEELINGSURF_INSTANCES else total
-    except: pass
-    return {"alive": alive, "pid": pid if alive else 0, "http": http_ok, "restarts": restarts, "rss": fs_rss}
+    return {
+        "alive": alive,
+        "pid": pid if alive else 0,
+        "http": http_ok,
+        "restarts": restarts,
+        "rss": _safe_process_rss(pid),
+    }
+
 
 def get_mem_status():
-    try:
-        with open("/tmp/memguard.json") as fh:
-            j = json.load(fh)
-            return j
-    except:
-        return {}
+    """Return read-only RSS telemetry for the native HF runtime."""
+    global MEMORY_PEAK_MB
+    used = _process_tree_rss_mb(os.getpid()) or 0.0
+    MEMORY_PEAK_MB = max(MEMORY_PEAK_MB, used)
+    ninehits_pid = _read_int("/tmp/viewer.pid")
+    feelingsurf_rss = 0.0
+    for idx in range(1, FEELINGSURF_INSTANCES + 1):
+        pid = _read_int(f"/tmp/feelingsurf-{idx}.pid")
+        if pid == 0 and idx == 1:
+            pid = _read_int("/tmp/feelingsurf.pid")
+        value = _safe_process_rss(pid)
+        if value is not None:
+            feelingsurf_rss += value
+    return {
+        "memory_used_mb": round(used, 1),
+        "memory_limit_mb": MEM_LIMIT_MB or None,
+        "memory_peak_mb": round(MEMORY_PEAK_MB, 1),
+        "hard_threshold_mb": None,
+        "ninehits_rss_mb": _safe_process_rss(ninehits_pid),
+        "feelingsurf_rss_mb": round(feelingsurf_rss, 1) if feelingsurf_rss else None,
+        "configured_mode": "off",
+        "effective_mode": "off",
+        "active_viewer": "both",
+        "time_slice_seconds": None,
+        "next_flip_in_seconds": None,
+        "interventions": 0,
+        "last_target": None,
+    }
+
 
 def get_combined_status():
     s9 = get_9hits_status()
-    fss = [get_feelingsurf_status(i+1) for i in range(FEELINGSURF_INSTANCES)]
+    fss = [get_feelingsurf_status(i + 1) for i in range(FEELINGSURF_INSTANCES)]
     mem = get_mem_status()
-    # overall
     any_fs = any(f["alive"] for f in fss)
     all_ok = s9["alive"] and any_fs
     status = "ok" if all_ok else ("starting" if (s9["alive"] or any_fs) else "down")
@@ -1099,16 +1194,16 @@ def build_ui():
     """) as demo:
         gr.Markdown(f"""
         <div class="hf-header">
-        <h1 style="margin:0">🌐 hits4me — FREE PLAN <span style="font-size:14px; color:#8b949e">Hugging Face Gradio · ZeroGPU</span></h1>
+        <h1 style="margin:0">🌐 hits4me — HF Gradio <span style="font-size:14px; color:#8b949e">native 16 GB runtime</span></h1>
         <div style="margin-top:6px; color:#8b949e; font-size:13px">
         <span class="badge ok">9Hits ×1 system session</span>
         <span class="badge ok">FeelingSurf ×3 parallel</span>
-        <span class="badge neutral">ZeroGPU · 16 GB RAM · 2 vCPU · concurrent</span>
+        <span class="badge neutral">16 GB RAM · 2 vCPU · native concurrent</span>
         <span class="badge neutral">{'✅ spaces' if SPACES_AVAILABLE else '⚠️ spaces missing'}</span>
         <span class="badge neutral">CLEAN CLOUD IP (no proxy pool needed)</span>
         </div>
         <div style="margin-top:8px; font-size:12px; color:#8b949e">
-        💡 Free Gradio now runs on <b>ZeroGPU</b> (free A100/H200, 3.5 min/day quota) — set Space <b>Hardware → ZeroGPU</b>. Add <code>ACCESS_KEY</code> (9Hits) and <code>ACCESS_TOKEN</code> (FeelingSurf) in <b>Settings → Variables and secrets</b>. Viewers are <b>CPU-only</b> (outside <code>@spaces.GPU</code>) so quota is not burned; only the ping below uses GPU (10s).
+        💡 Viewers run as ordinary CPU processes with native flags. The built-in <code>ACCESS_KEY</code> and <code>ACCESS_TOKEN</code> are used automatically; optional Space variables can override them. ZeroGPU support is optional and only applies to the manual ping below.
         </div>
         </div>
         """)
@@ -1118,18 +1213,18 @@ def build_ui():
 
         with gr.Row():
             with gr.Column(scale=1):
-                gr.Markdown("### 📊 Memory (memguard PSS)")
-                mem_html = gr.HTML(value="<div style='color:#8b949e'>waiting for memguard.json…</div>")
+                gr.Markdown("### 📊 Memory (read-only process RSS)")
+                mem_html = gr.HTML(value="<div style='color:#8b949e'>waiting for process telemetry…</div>")
             with gr.Column(scale=1):
                 gr.Markdown("### ⚙️ Config — FREE PLAN")
                 gr.Markdown(f"""
                 | Key | Value (env) | Note |
                 |-----|-------------|------|
-                | **Hardware** | **ZeroGPU** (free) | free Gradio runs on ZeroGPU; select Hardware → ZeroGPU in Space Settings |
+                | **Hardware** | **HF Gradio** | CPU/native viewer processes; ZeroGPU is optional |
                 | **9Hits sessions** | **1** system | `SYSTEM_SESSION=yes`, `EX_PROXY_SESSIONS=0` |
                 | **FeelingSurf instances** | **{FEELINGSURF_INSTANCES}** | `FEELINGSURF_INSTANCES={FEELINGSURF_INSTANCES}` (same token) |
-                | **DUAL_VIEWER_MODE** | `concurrent` | 16GB fits both, no time-slice |
-                | **LOW_MEMORY** | `auto` | off on 16GB, balanced if <1GB |
+                | **DUAL_VIEWER_MODE** | `off` | native concurrent processes; no scheduler |
+                | **LOW_MEMORY** | `off` | normal upstream viewer flags |
                 | **RESET_INTERVAL** | `2h` | viewer self-restart |
                 | **NH_DISPLAY** | `:99` | 9Hits Xvfb |
                 | **FS displays** | `:98,:97,:96` | 1 per FeelingSurf |
@@ -1141,8 +1236,8 @@ def build_ui():
 
         with gr.Row():
             with gr.Column(scale=1):
-                gr.Markdown("### ⚡ ZeroGPU (free hardware)")
-                gr.Markdown("Free Gradio now runs on **ZeroGPU** (A100/H200, free 3.5 min/day) — set **Space Settings → Hardware → ZeroGPU**. Viewers are **CPU-only** to save GPU quota; only this ping burns quota (10s).")
+                gr.Markdown("### ⚡ Optional ZeroGPU check")
+                gr.Markdown("If this Space exposes **ZeroGPU**, this optional ping checks it. Viewers remain ordinary CPU processes and do not depend on the GPU quota.")
                 with gr.Row():
                     zerogpu_input = gr.Textbox(label="Ping message", value="hello", scale=3, placeholder="hello")
                     zerogpu_btn = gr.Button("⚡ Ping ZeroGPU (10s)", variant="secondary", scale=1)
@@ -1150,11 +1245,11 @@ def build_ui():
                 zerogpu_btn.click(fn=zerogpu_ping_wrapper, inputs=zerogpu_input, outputs=zerogpu_out)
                 gr.Markdown(f"<span style='font-size:11px; color:#8b949e'>{'✅ spaces installed — dummy @spaces.GPU keeps ZeroGPU alive' if SPACES_AVAILABLE else '❌ spaces not installed — add `spaces` to requirements.txt'} · quota 3.5 min/day free (Pro 8×) · viewers stay CPU → quota not used</span>")
             with gr.Column(scale=1):
-                gr.Markdown("### 🔑 Secrets — ZeroGPU free")
+                gr.Markdown("### 🔑 Credentials")
                 gr.Markdown(f"""
-                - `ACCESS_KEY` **{'✅' if os.environ.get('ACCESS_KEY') else '❌ missing'}** · `ACCESS_TOKEN` **{'✅' if os.environ.get('ACCESS_TOKEN') or os.environ.get('access_token') else '❌ missing'}**
-                - Hardware: **ZeroGPU** (free) · Python 3.10/3.12 recommended
-                - [HF docs: ZeroGPU](https://huggingface.co/docs/hub/spaces-zerogpu) · `@spaces.GPU` required
+                - `ACCESS_KEY` **{'✅ built-in' if os.environ.get('ACCESS_KEY') else '❌ missing'}** · `ACCESS_TOKEN` **{'✅ built-in' if os.environ.get('ACCESS_TOKEN') or os.environ.get('access_token') else '❌ missing'}**
+                - Environment variables remain optional overrides.
+                - Python 3.10/3.12 recommended; ZeroGPU is optional.
                 """)
 
         with gr.Tabs():
@@ -1174,19 +1269,19 @@ def build_ui():
             with gr.TabItem("⚙️ Setup & Health", elem_id="tab-setup"):
                 log_setup = gr.Textbox(label="Setup / Downloads / Health", value=lambda: get_logs("setup", 80) + "\n\n--- health ---\n" + get_logs("health", 30), lines=16, every=3, interactive=False, elem_classes=["log-box"])
                 gr.Markdown(f"""
-                **Health endpoints:**  
-                - Internal: `GET http://localhost:{PORT_HEALTH}/health` (combined JSON, from `health_server.py`)  
-                - Gradio: `GET http://localhost:{PORT_GRADIO}/` (this UI) — HF Spaces health check uses this.  
+                **Health endpoints:**
+                - Internal: `GET http://localhost:{PORT_HEALTH}/health` (combined JSON, from `health_server.py`)
+                - Gradio: `GET http://localhost:{PORT_GRADIO}/` (this UI) — HF Spaces health check uses this.
                 For uptime bots, monitor this Gradio URL or the internal `/health` via a forwarded check.
 
-                **Secrets checklist:**  
-                - `ACCESS_KEY` set? **{ '✅ yes' if os.environ.get('ACCESS_KEY') else '❌ missing — Space will show User not found!' }**  
-                - `ACCESS_TOKEN` / `access_token` set? **{ '✅ yes' if os.environ.get('ACCESS_TOKEN') or os.environ.get('access_token') else '❌ missing — FeelingSurf will fail auth' }**
+                **Secrets checklist:**
+                - `ACCESS_KEY` available? **{ '✅ built-in/override' if os.environ.get('ACCESS_KEY') else '❌ missing — Space will show User not found!' }**
+                - `ACCESS_TOKEN` / `access_token` available? **{ '✅ built-in/override' if os.environ.get('ACCESS_TOKEN') or os.environ.get('access_token') else '❌ missing — FeelingSurf will fail auth' }**
                 """)
 
         gr.Markdown("""
         <div style="text-align:center; color:#484f58; font-size:11px; margin-top:12px">
-        FREE PLAN: 1×9Hits system session + 3×FeelingSurf (same token) · concurrent on 16GB · <a href="/health" target="_blank" style="color:#58a6ff">/health</a> (port 10000) · logs update every 3s · build: app_hf.py
+        HF NATIVE: 1×9Hits system session + 3×FeelingSurf (same token) · native concurrent processes on 16GB · <a href="/health" target="_blank" style="color:#58a6ff">/health</a> (port 10000) · logs update every 3s · build: app_hf.py
         </div>
         """)
 
@@ -1207,7 +1302,7 @@ def build_ui():
             nh_pid = s9["pid"]
             nh_rest = s9["restarts"]
             nh_silent = s9["silent"]
-            nh_rss = f'{s9["rss"]} MB' if s9["rss"] else "—"
+            nh_rss = f'{s9["rss"]} MB' if s9["rss"] is not None else "—"
             # FS lines
             fs_lines = ""
             for i, fs in enumerate(fss, start=1):
@@ -1223,24 +1318,22 @@ def build_ui():
             limit = mem.get("memory_limit_mb") or MEM_LIMIT_MB
             peak = mem.get("memory_peak_mb")
             hard = mem.get("hard_threshold_mb")
-            # fallback: try ps via /proc if memguard not yet
-            if used is None:
-                try:
-                    # approximate via total RSS quick sum? leave as —
-                    pass
-                except: pass
-            mem_line = f"<div style='color:#8b949e; font-size:12px'> memguard not yet reported — will appear after 5s</div>"
+            # Memory is read-only telemetry; no process is restarted based on it.
+            mem_line = "<div style='color:#8b949e; font-size:12px'>normal process RSS telemetry — no memory guardian or low-memory tuning</div>"
             if used is not None and limit:
                 pct = min(100, (used/limit*100) if limit else 0)
-                th_pct = min(100, (hard/limit*100) if hard and limit else 97)
+                threshold_marker = ""
+                if hard and limit:
+                    th_pct = min(100, hard / limit * 100)
+                    threshold_marker = f"<div style=\"position:absolute; top:0; bottom:0; left:{th_pct}%; width:2px; background:#f85149\"></div>"
                 color = "#3fb950" if pct < 75 else ("#d29922" if pct < 90 else "#f85149")
                 mem_line = f"""
                 <div style="margin:6px 0 2px; background:#21262d; border-radius:7px; height:14px; position:relative; overflow:hidden">
                   <div style="width:{pct}%; background:{color}; height:100%; transition:width .5s"></div>
-                  <div style="position:absolute; top:0; bottom:0; left:{th_pct}%; width:2px; background:#f85149"></div>
+                  {threshold_marker}
                 </div>
-                <div style="display:flex; justify-content:space-between; font-size:11px; color:#8b949e"><span>0</span><span>{pct:.0f}% of {limit} MB (threshold {hard or '—'} MB)</span><span>{limit} MB</span></div>
-                <div style="display:flex; gap:12px; font-size:11px; color:#8b949e; margin-top:6px"><span>used <b style='color:#e6edf3'>{used} MB</b></span><span>peak <b style='color:#e6edf3'>{peak or '—'} MB</b></span><span>limit <b style='color:#e6edf3'>{limit} MB</b></span><span>mode <b style='color:#e6edf3'>{mem.get('effective_mode') or mem.get('configured_mode') or 'concurrent'}</b></span></div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; color:#8b949e"><span>0</span><span>{pct:.0f}% of {limit} MB (threshold {hard or 'none'} MB)</span><span>{limit} MB</span></div>
+                <div style="display:flex; gap:12px; font-size:11px; color:#8b949e; margin-top:6px"><span>used <b style='color:#e6edf3'>{used} MB</b></span><span>peak <b style='color:#e6edf3'>{peak or '—'} MB</b></span><span>limit <b style='color:#e6edf3'>{limit} MB</b></span><span>mode <b style='color:#e6edf3'>{mem.get('effective_mode') or mem.get('configured_mode') or 'off'}</b></span></div>
                 """
             # config warnings
             ak_ok = bool(os.environ.get("ACCESS_KEY"))
@@ -1267,7 +1360,7 @@ def build_ui():
                   <div style="display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px dashed #21262d"><span style="color:#8b949e">running</span><span style="font-weight:600">{s9['alive']} · {nh_icon} {nh_state}</span></div>
                   <div style="display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px dashed #21262d"><span style="color:#8b949e">pid / restarts</span><span style="font-weight:600">{nh_pid or '—'} / {nh_rest}</span></div>
                   <div style="display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px dashed #21262d"><span style="color:#8b949e">silent (s)</span><span style="font-weight:600">{nh_silent if nh_silent is not None else '—'}</span></div>
-                  <div style="display:flex; justify-content:space-between; padding:3px 0"><span style="color:#8b949e">RSS (PSS)</span><span style="font-weight:600">{nh_rss}</span></div>
+                  <div style="display:flex; justify-content:space-between; padding:3px 0"><span style="color:#8b949e">RSS</span><span style="font-weight:600">{nh_rss}</span></div>
                   <div style="margin-top:8px; font-size:11px; color:#8b949e">SYSTEM_SESSION=yes · CLEAR_ALL_SESSIONS=yes · no proxy (free IP)</div>
                 </div>
                 <div style="background:#0d1117; border:1px solid #21262d; border-radius:8px; padding:10px">
@@ -1277,7 +1370,7 @@ def build_ui():
                 </div>
               </div>
               <div style="margin-top:12px; background:#0d1117; border:1px solid #21262d; border-radius:8px; padding:10px">
-                <div style="font-size:11px; color:#8b949e; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px">Container memory (PSS — unique, from memguard)</div>
+                <div style="font-size:11px; color:#8b949e; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px">Container memory (ordinary process RSS)</div>
                 {mem_line}
               </div>
               {warn}
@@ -1288,25 +1381,25 @@ def build_ui():
         def render_mem():
             mem = get_mem_status()
             if not mem:
-                return "<div style='color:#8b949e; font-size:12px; padding:10px; background:#0d1117; border:1px solid #21262d; border-radius:8px'>memguard not yet reported (starts after ~5s) — fallback limit ~%s MB<br><span style='font-size:11px'>Check <code>/tmp/memguard.json</code> or wait for first sample.</span></div>" % MEM_LIMIT_MB
+                return "<div style='color:#8b949e; font-size:12px; padding:10px; background:#0d1117; border:1px solid #21262d; border-radius:8px'>process RSS telemetry is not available yet — runtime limit ~%s MB</div>" % MEM_LIMIT_MB
             used = mem.get("memory_used_mb", "—")
-            limit = mem.get("memory_limit_mb", MEM_LIMIT_MB)
+            limit = mem.get("memory_limit_mb") or "unlimited"
             peak = mem.get("memory_peak_mb", "—")
-            hard = mem.get("hard_threshold_mb", "—")
+            hard = mem.get("hard_threshold_mb") or "none"
             nh = mem.get("ninehits_rss_mb", "—")
             fs = mem.get("feelingsurf_rss_mb", "—")
-            mode = mem.get("effective_mode", mem.get("configured_mode", "concurrent"))
+            mode = mem.get("effective_mode", mem.get("configured_mode", "off"))
             active = mem.get("active_viewer", "both")
-            nxt = mem.get("next_flip_in_seconds", "—")
+            nxt = mem.get("next_flip_in_seconds") or "none"
             interventions = mem.get("interventions", 0)
             return f"""
             <div style="background:#0d1117; border:1px solid #21262d; border-radius:8px; padding:12px; font-size:13px">
               <div style="display:flex; justify-content:space-between"><span style="color:#8b949e">used / limit</span><span style="font-weight:700">{used} / {limit} MB</span></div>
               <div style="display:flex; justify-content:space-between"><span style="color:#8b949e">peak / threshold</span><span>{peak} / {hard} MB</span></div>
-              <div style="display:flex; justify-content:space-between"><span style="color:#8b949e">9Hits / FeelingSurf (PSS)</span><span>{nh} / {fs} MB</span></div>
+              <div style="display:flex; justify-content:space-between"><span style="color:#8b949e">9Hits / FeelingSurf RSS</span><span>{nh} / {fs} MB</span></div>
               <div style="display:flex; justify-content:space-between"><span style="color:#8b949e">mode / active</span><span>{mode} / {active}</span></div>
               <div style="display:flex; justify-content:space-between"><span style="color:#8b949e">next flip / interventions</span><span>{nxt} s / {interventions}</span></div>
-              <div style="margin-top:8px; font-size:11px; color:#8b949e">PSS = proportional set size (unique memory, not double-counted shared libs). Render 512MB: memguard at 97%; HF 16GB: never hits.</div>
+              <div style="margin-top:8px; font-size:11px; color:#8b949e">RSS is shown for visibility only. Native HF mode has no memory guardian, low-memory flags, or time-slice scheduler.</div>
             </div>
             """
 
@@ -1352,7 +1445,9 @@ def main():
         if os.path.exists(health_py):
             env_h = os.environ.copy()
             env_h["PORT"] = str(PORT_HEALTH)
-            # pass through supervisor pids (optional)
+            # Let the health process inspect the complete native HF process tree
+            # for read-only RSS telemetry.
+            env_h["SUPERVISOR_PID"] = str(os.getpid())
             subprocess.Popen(["python3", health_py], env=env_h)
             log("health", f"health_server pre-started on :{PORT_HEALTH}")
         else:
@@ -1375,22 +1470,6 @@ def main():
         th = threading.Thread(target=_starter, daemon=True, name=f"feelingsurf-{i}")
         th.start()
         log("setup", f"FeelingSurf supervisor #{i} thread started (port {3000+i-1} display :{99-i})")
-
-    # Start memguard separately for HF direct mode (start.sh would start it in Docker mode)
-    # If health_server already started memguard via start.sh, this is extra but harmless
-    # We try to start memguard.py directly for HF
-    try:
-        memguard_py = os.path.join(os.path.dirname(__file__), "memguard.py")
-        if not os.path.exists(memguard_py):
-            memguard_py = "/memguard.py"
-        if os.path.exists(memguard_py):
-            # Only if not already started by start.sh path (we are in direct mode when /opt/9hits missing)
-            if not os.path.exists("/opt/9hits/nhviewer"):
-                env_mg = os.environ.copy()
-                subprocess.Popen(["python3", memguard_py], env=env_mg)
-                log("setup", f"memguard started directly ({memguard_py}) for HF mode")
-    except Exception as e:
-        log("setup", f"memguard direct start failed: {e}")
 
     # Build and launch Gradio
     if gr:

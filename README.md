@@ -5,7 +5,7 @@ colorFrom: blue
 colorTo: indigo
 sdk: gradio
 sdk_version: 4.44.0
-app_file: app.py
+app_file: app_hf.py
 pinned: false
 ---
 
@@ -28,7 +28,7 @@ Each provider assigns an isolated, clean datacenter outbound IP address:
 
 | Platform | Free Tier Type | Resources | Outbound Region / IP | Deployment Method |
 | :--- | :--- | :--- | :--- | :--- |
-| **Hugging Face Spaces** | **100% Free (Gradio SDK)** | **16 GB RAM**, 2 vCPU | US / EU (AWS) | Free Gradio Space (`app.py`) |
+| **Hugging Face Spaces** | **100% Free (Gradio SDK)** | **16 GB RAM**, 2 vCPU | US / EU (AWS) | Free Gradio Space (`app_hf.py`) |
 | **Koyeb** | ACCESS_KEY + ACCESS_TOKEN are hard-coded in `koyeb.yaml`. | Uses `koyeb.yaml`; one service runs both viewers. |
 | **Render** | **100% Free (Web Service)** | 512 MB RAM, 750 hrs/mo | Oregon, Ohio, Frankfurt, Singapore | Docker (`render.yaml`, both tokens hard-coded) |
 | **Oracle Cloud Always Free** | **100% Forever Free** | **24 GB RAM**, 4 ARM cores | Your chosen home region | `docker compose up -d` |
@@ -40,20 +40,20 @@ Each provider assigns an isolated, clean datacenter outbound IP address:
 ## Deployment Guides for 100% Free Platforms
 
 ### 1. Hugging Face Spaces (100% FREE — Gradio SDK, 16 GB RAM)
-> 💡 *Note: Docker Spaces require a paid subscription on HF, but **Gradio Spaces are 100% Free** with 16 GB RAM! This repo includes `app.py` to run seamlessly on the free Gradio SDK.*
+> 💡 *Note: Docker Spaces require a paid subscription on HF, but **Gradio Spaces are 100% Free** with 16 GB RAM! This repo includes `app_hf.py` to run seamlessly on the standard Gradio SDK.*
 
 1. Go to [huggingface.co/spaces](https://huggingface.co/spaces) → **Create new Space**.
 2. Space Name: `hits4me-viewer` (or any name).
 3. Select **Gradio** SDK (leave hardware as **Free 2 vCPU · 16 GB RAM**).
 4. Connect or duplicate this repository.
-5. In **Settings** → **Variables and secrets**, add:
-   - Secret `ACCESS_KEY`: `<your-9hits-access-key>`
-   - Variable `SYSTEM_SESSION`: `yes`
-   - Variable `CLEAR_ALL_SESSIONS`: `yes`
-   - Variable `SESSION_NOTE`: `hf-system`
-   - Variable `NOTE`: `huggingface`
-   - Variable `RESET_INTERVAL`: `2h`
-6. The Space will build and launch a live status dashboard while running the 9Hits Viewer.
+5. The HF entrypoint includes the configured `ACCESS_KEY` and `ACCESS_TOKEN`, so
+   no secret variables are required. Optional variables with those names override
+   the built-in values. Keep `SYSTEM_SESSION=yes`, `CLEAR_ALL_SESSIONS=yes`,
+   `SESSION_NOTE=hf-system`, `NOTE=huggingface`, and `RESET_INTERVAL=2h` if you
+   want to customize the defaults.
+6. The Space will build and launch a live status dashboard while running 9Hits
+   and three native FeelingSurf processes. HF mode uses `LOW_MEMORY=off`,
+   `DUAL_VIEWER_MODE=off`, and does not start `memguard.py`.
 
 ---
 
@@ -316,7 +316,7 @@ The combined repository `Dockerfile` is used on cloud platforms. Configure both 
 | **Fly.io** | Deploy this repository Dockerfile and set both secrets. | Uses `fly.toml`; one service runs both viewers. |
 | **Railway** | Deploy this repository Dockerfile and set both secrets. | Uses `railway.json`; one service runs both viewers. |
 | **Zeabur** | Deploy this repository Dockerfile and set both secrets. | Uses `zeabur.json`; one service runs both viewers. |
-| **Hugging Face Spaces** | Docker Space; image `feelingsurf/viewer:stable` (paid Docker Space required). | For the 100% free Gradio Space path, run the **9Hits** viewer (`app.py`) and use a second space / external host for FeelingSurf. |
+| **Hugging Face Spaces** | Standard Gradio Space; `app_hf.py` downloads and runs both viewers natively. | 16 GB runtime: 1× 9Hits system session + 3× FeelingSurf, with no memory guardian or low-memory tuning. |
 
 Recommended platform sizing per FeelingSurf container (per the [official repo](https://github.com/feelingsurf/docker-viewer)):
 

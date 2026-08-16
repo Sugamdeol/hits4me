@@ -25,16 +25,18 @@ Response (200) example:
       "dual_viewer_mode": "auto",          # configured DUAL_VIEWER_MODE
       "effective_mode": "time-slice",      # auto may escalate to time-slice
       "active_viewer": "feelingsurf",      # who owns the RAM right now
-      "memory_used_mb": 412.5,             # total unique memory, PSS (memguard)
+      "memory_used_mb": 412.5,             # total process RSS
       "memory_limit_mb": 512,
       "memory_peak_mb": 498.1,
-      "ninehits_rss_mb": 0.0,              # per-viewer unique memory, PSS
+      "ninehits_rss_mb": 0.0,              # per-viewer RSS when available
       "feelingsurf_rss_mb": 331.2,
       "next_flip_in_seconds": 412          # countdown (time-slice mode only)
     }
 
-The last block comes from memguard.py's /tmp/memguard.json and is all `null`
-when memguard is not running (DUAL_VIEWER_MODE=off or an older image).
+The memory/mode block comes from the optional guardian's
+`/tmp/memguard.json` on small Docker deployments. When the guardian is not
+running (for example, native HF mode with `DUAL_VIEWER_MODE=off`), the server
+returns a read-only process RSS snapshot instead.
 
 When NINEHITS_ENABLED=no (the default) the 9Hits fields (`viewer_running`,
 `viewer_phase`, `viewer_silent_seconds`, `xvfb_running`) are `null` and
@@ -104,6 +106,117 @@ def memguard_state():
     return {}
 
 
+def _proc_parent_map():
+    """Return a best-effort parent -> children map from /proc."""
+    children = {}
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return children
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as fh:
+                raw = fh.read()
+            right = raw.rfind(b")")
+            fields = raw[right + 2 :].split()
+            parent = int(fields[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(parent, []).append(pid)
+    return children
+
+
+def _process_tree(root_pid):
+    children = _proc_parent_map()
+    result = set()
+    pending = [root_pid] if root_pid > 1 else []
+    while pending:
+        pid = pending.pop()
+        if pid in result:
+            continue
+        result.add(pid)
+        pending.extend(children.get(pid, ()))
+    return result
+
+
+def _rss_mb(pid):
+    try:
+        with open(f"/proc/{pid}/status", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024.0
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0.0
+
+
+def _pid_alive(pid):
+    if pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def native_memory_state():
+    """Read-only RSS snapshot used when the optional guardian is absent."""
+    root_pid = SUPERVISOR_PID if _pid_alive(SUPERVISOR_PID) else os.getpid()
+    pids = _process_tree(root_pid)
+    used = round(sum(_rss_mb(pid) for pid in pids), 1) if pids else None
+    limit = None
+    for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = fh.read().strip()
+            if raw and raw != "max":
+                value = int(raw)
+                if 0 < value < 1 << 40:
+                    limit = value // (1024 * 1024)
+                    break
+        except (OSError, ValueError):
+            pass
+    if limit is None:
+        try:
+            with open("/proc/meminfo", "r", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("MemTotal:"):
+                        limit = int(line.split()[1]) // 1024
+                        break
+        except (OSError, ValueError, IndexError):
+            pass
+    return {
+        "memory_used_mb": used,
+        "memory_limit_mb": limit,
+        "memory_peak_mb": used,
+        "hard_threshold_mb": None,
+        "ninehits_rss_mb": None,
+        "feelingsurf_rss_mb": None,
+        "active_viewer": "both",
+        "time_slice_seconds": None,
+        "next_flip_in_seconds": None,
+        "interventions": 0,
+        "last_target": None,
+    }
+
+
+def runtime_memory_state():
+    """Use guardian data for Docker, read-only RSS for native HF mode."""
+    # Ignore stale files from a previous process when the current HF app has
+    # explicitly selected native mode.
+    if MEMGUARD_PID > 1 or DUAL_VIEWER_MODE != "off":
+        state = memguard_state()
+        if state:
+            return state
+    return native_memory_state()
+
+
 def effective_mode():
     """Configured vs actual mode: memguard may escalate auto -> time-slice."""
     try:
@@ -113,6 +226,8 @@ def effective_mode():
             return mode
     except OSError:
         pass
+    if DUAL_VIEWER_MODE == "off":
+        return "off"
     return None
 
 HEALTH_PATHS = ("/health", "/healthz", "/ping")
@@ -313,18 +428,6 @@ def _read_int(path):
         return 0
 
 
-def _pid_alive(pid):
-    if pid <= 1:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-
 def viewer_running():
     return _pid_alive(_read_int(PID_FILE))
 
@@ -488,7 +591,7 @@ class Handler(BaseHTTPRequestHandler):
             status = "restarting"
         else:
             status = "error"
-        mg = memguard_state()
+        mg = runtime_memory_state()
         body = json.dumps(
             {
                 "service": "hits4me-combined-viewer",
@@ -507,8 +610,8 @@ class Handler(BaseHTTPRequestHandler):
                 "feelingsurf_supervisor_running": feelingsurf_supervisor,
                 "feelingsurf_pid": _read_int(FEELINGSURF_PID_FILE),
                 "feelingsurf_restarts": _read_int(FEELINGSURF_RESTART_FILE),
-                # 512MB dual-viewer management (memguard.py). All fields are
-                # None when memguard is not running.
+                # Docker may provide guardian data; native HF mode reports
+                # read-only RSS instead and leaves intervention fields at zero.
                 "dual_viewer_mode": DUAL_VIEWER_MODE,
                 "effective_mode": effective_mode(),
                 "active_viewer": mg.get("active_viewer"),

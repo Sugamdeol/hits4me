@@ -1,147 +1,89 @@
-# Hugging Face FREE PLAN — Gradio ZeroGPU (1× 9Hits + 3× FeelingSurf)
+# Hugging Face Gradio — native 1×9Hits + 3×FeelingSurf
 
-This repo ships a **dedicated Hugging Face Gradio file for ZeroGPU** (100% free tier, free Gradio now runs on ZeroGPU only — Docker Spaces are paid):
+This repository's Hugging Face entrypoint is `app_hf.py`. It is a normal
+Gradio application, not the 512 MB Docker deployment:
 
-- **9Hits Viewer v6 → 1 system session** (clean cloud IP, no proxy pool, avoids `Duplicate USER on IP`)
-- **FeelingSurf Viewer → 3 parallel instances** (same `access_token`, 3× earnings — official 3-container compose collapsed into one Space)
+- **9Hits v6:** one system session on the Space's outbound IP;
+- **FeelingSurf:** three parallel instances using the same token; and
+- **memory:** native viewer behavior on the HF runtime, with no memory
+  guardian, no time-slice scheduler, and no low-memory flags.
 
-**Hardware:** `ZeroGPU` — free A100/H200 (time-sliced, 3.5 min/day free quota, Pro 8×) + 16 GB RAM · 2 vCPU. Both viewers run **concurrently** (`DUAL_VIEWER_MODE=concurrent`, `LOW_MEMORY=auto`). On 512 MB plans (Render/Koyeb) the same pair needs `extreme` + memguard; on ZeroGPU you get headroom and viewers stay **CPU-only** (quota not burned).
+The Docker deployment still contains the separate `start.sh`/`memguard.py`
+small-host safeguards for Render and Koyeb. They are not started by the HF
+entrypoint.
 
-## File
+## HF entrypoint behavior
 
-- **`app_hf.py`** — primary HF Gradio ZeroGPU entrypoint (also `gradio_app.py` / `huggingface_app.py` / `app_huggingface.py`).  
-  Original `app.py` remains as 9Hits-only legacy; use `app_hf.py` for FREE 1+3 ZeroGPU.
+`app_hf.py` downloads missing viewer binaries without root, starts Xvfb, and
+supervises the viewers directly. Its forced native settings are:
 
-`app_hf.py` includes:
-- `import spaces` + dummy `@spaces.GPU(duration=10)` (`_zerogpu_ping`) — **HF requires ≥1 GPU-decorated function** on ZeroGPU or the Space crashes. This ping is **not** auto-called; viewers run outside GPU to save quota (10s per manual ping only).
-- ZeroGPU ping button in the dashboard to test GPU quota without starting viewers.
+```text
+NINEHITS_ENABLED=yes
+FEELINGSURF_ENABLED=yes
+FEELINGSURF_INSTANCES=3
+SYSTEM_SESSION=yes
+CLEAR_ALL_SESSIONS=yes
+EX_PROXY_SESSIONS=0
+DUAL_VIEWER_MODE=off
+LOW_MEMORY=off
+FS_SP=no
+FS_RESOLUTION=1920x1080x24
+```
 
-## What it does
+The dashboard reads process RSS only for display. It does not kill, restart, or
+reconfigure viewers based on memory usage.
 
-- Auto-detects Docker vs HF ZeroGPU runtime:
-  - **Docker** (`/opt/9hits/nhviewer` + `/usr/bin/FeelingSurfViewer` + Xvfb) → launches `start.sh` for 9Hits (Xvfb/memguard/health) + 3× `feelingsurf-run.sh` (`:98`/`:97`/`:96`, ports `3000`/`3001`/`3002`). `spaces` is a no-op here.
-  - **HF Gradio ZeroGPU** (no baked binaries) → auto-downloads without root:
-    - 9Hits v6: `https://dl.9hits.com/9hitsv6-linux64.tar.bz2` → `/tmp/9hits`
-    - FeelingSurf 2.5.2: `https://github.com/feelingsurf/viewer/releases/download/2.5.2/FeelingSurfViewer-linux-<arch>-2.5.2.deb` via `dpkg -x` → `/tmp/feelingsurf`
-    Then supervises Xvfb + viewers + memguard + health (1+3) — same restart logic as `start.sh`.
+## Credentials
 
-- **Gradio dashboard** (auto-refresh 2–3 s, ZeroGPU-aware):
-  - Header badges: `ZeroGPU · 16GB` + `spaces ✅/❌`
-  - Status cards: 9Hits (phase/pid/restarts/silent) + 3× FeelingSurf (pid/restarts/http) + memory bar (PSS)
-  - **ZeroGPU row**: ping input + `⚡ Ping ZeroGPU (10s)` button + result box + quota note (3.5 min/day)
-  - Tabs: Combined / 9Hits / FS#1-3 / Setup & Health
-  - Secrets checklist, config table (`Hardware: ZeroGPU`), health links
+`app_hf.py` includes the configured 9Hits `ACCESS_KEY` and FeelingSurf
+`ACCESS_TOKEN`. A Space variable with either name overrides the built-in value,
+but variables are optional. The values are not written to logs or displayed in
+the UI.
 
-- **Health**: `health_server.py` on `HEALTH_PORT=10000` (`/health`); Gradio on `PORT=7860` (HF exposes 7860). For uptime bots, ping Gradio URL or internal `/health`.
+## Deploy step by step
 
-## Free plan env defaults (Space → Settings → Variables and secrets)
+1. Create a new Space at <https://huggingface.co/spaces>.
+2. Select the **Gradio** SDK. CPU Basic or larger hardware is suitable;
+   ZeroGPU is optional.
+3. Set `app_file: app_hf.py` in the Space README metadata, or use the
+   repository's root `README.md` unchanged.
+4. Upload the repository. For a minimal upload, use:
+   - `app_hf.py`
+   - `health_server.py`
+   - `run_pty.py`
+   - `feelingsurf-run.sh`
+   - `fetch_proxy_list.py`
+   - `requirements.txt`
+   - `packages.txt`
+5. Build or restart the Space. Startup logs should show native mode and the
+   two viewer families starting concurrently.
 
-| Var | Default (free) | Note |
-|-----|----------------|------|
-| `ACCESS_KEY` | *(secret)* | 9Hits 32-hex |
-| `ACCESS_TOKEN` / `access_token` | *(secret)* | FeelingSurf token |
-| `NINEHITS_ENABLED` | `yes` | |
-| `FEELINGSURF_ENABLED` | `yes` | |
-| `FEELINGSURF_INSTANCES` | `3` | 1–5, default 3 |
-| `SYSTEM_SESSION` | `yes` | 1 system session |
-| `CLEAR_ALL_SESSIONS` | `yes` | |
-| `EX_PROXY_SESSIONS` | `0` | no proxy (free IP) |
-| `SESSION_NOTE` | `hf-free-system` | |
-| `NOTE` | `hf-free` | |
-| `HIDE_BROWSER` | `yes` | |
-| `CACHE_LIMIT` | `0` | |
-| `RESET_INTERVAL` | `2h` | |
-| `DUAL_VIEWER_MODE` | `concurrent` | 16GB ZeroGPU |
-| `LOW_MEMORY` | `auto` | off on 16GB |
-| `NH_DISPLAY` | `:99` | |
-| `FEELINGSURF_DISPLAY` | `:98`→`:96` | 1 per FS |
-| `PORT` | `7860` | Gradio |
-| `HEALTH_PORT` | `10000` | health |
-| `DEFAULT_DL` | `https://dl.9hits.com/9hitsv6-linux64.tar.bz2` | |
-| `FSVIEWER_VERSION` | `2.5.2` | |
-| `SUPERVISOR_DELAY` | `10` | |
-| `FS_SHARE_DISPLAY` | `no` | |
+`app.py` is a compatibility wrapper for older Spaces that still point at that
+filename. `app_huggingface.py`, `huggingface_app.py`, and `gradio_app.py` are
+synchronized aliases.
 
-All can be overridden; e.g. `FEELINGSURF_INSTANCES=1` for 1+1, or `5` for 5× (still <16 GB).
+## Health and dashboard
 
-## Deploy on Hugging Face ZeroGPU (step-by-step)
+- Gradio is exposed on `PORT` (normally `7860`).
+- `health_server.py` listens on `HEALTH_PORT` (normally `10000`) inside the
+  Space and serves `/health`.
+- The Gradio UI shows combined logs, per-viewer status, restart counts, and
+  read-only process RSS.
 
-### Option A — Direct upload (recommended)
-
-1. **Create Space** → https://huggingface.co/spaces → **Create new Space**
-   - Owner: you
-   - Name: `hits4me-free` (or any)
-   - **SDK: Gradio** (Docker is paid; Gradio+ZeroGPU is free)
-   - **Hardware: ZeroGPU** — free A100/H200 (if you see CPU Basic, pick **ZeroGPU**; free Gradio now runs only on ZeroGPU)
-   - Visibility: Private (secrets) or Public
-
-2. **Upload files**:
-   - Minimal: `app_hf.py` + `health_server.py` + `memguard.py` + `run_pty.py` + `feelingsurf-run.sh` + `fetch_proxy_list.py` + `requirements.txt` + `packages.txt`
-   - Or whole repo via `git push` / web uploader — include `app_hf.py`
-
-3. **README frontmatter** — ensure `app_file: app_hf.py` (or rename `app_hf.py` → `app.py`):
-   ```yaml
-   ---
-   title: hits4me FREE - 9Hits 1 Session + FeelingSurf 3x
-   emoji: 🌐
-   colorFrom: blue
-   colorTo: indigo
-   sdk: gradio
-   sdk_version: 4.44.0
-   app_file: app_hf.py
-   pinned: false
-   python_version: "3.10"
-   ---
-   ```
-   (Hardware is set via **Settings → Hardware → ZeroGPU**, not via YAML — `hardware:` in README is ignored; use `hf spaces settings --hardware zero-a10g` or the UI.)
-
-4. **Secrets**:
-   - Settings → Variables and secrets → Secrets: `ACCESS_KEY` (9Hits) + `ACCESS_TOKEN` (FeelingSurf, also accepts `access_token`)
-   - Optional variable: `FEELINGSURF_INSTANCES=3`
-
-5. **Build** — HF runs `pip install -r requirements.txt` (`gradio` + `spaces`) + `apt` from `packages.txt`, then `python app_hf.py`
-   - Logs: `[setup] Detected memory limit ~16384 MB`, downloads if needed, `Gradio on 0.0.0.0:7860` + `spaces` ping ready
-   - Dashboard: header `ZeroGPU · 16GB` + `✅ spaces`, status `OK` when both viewers alive, **ZeroGPU ping button** tests GPU (10s quota per click).
-
-6. **Verify**:
-   - Status card: `9Hits ✅` + `FeelingSurf 3/3 alive`
-   - Logs tabs: `AUTH ok` / `connected`
-   - ZeroGPU: click `⚡ Ping ZeroGPU` → `ZeroGPU ping: hello @ ...` (if `spaces not installed`, add `spaces` to `requirements.txt`)
-   - Health: internal `GET http://localhost:10000/health` (memguard stats) — for uptime bots, monitor Gradio URL
-
-### Option B — Duplicate
-
-Push to GitHub → HF → **Duplicate Space** → set Hardware **ZeroGPU** + `app_file: app_hf.py` + same secrets.
-
-## Why 1 + 3 on ZeroGPU?
-
-- **9Hits**: Public pool closed. One system session on ZeroGPU's isolated IP is most reliable free.
-- **FeelingSurf**: Official compose is 1 container/viewer. ZeroGPU's 16 GB holds 3× viewers in one Space (~6–8 GB + 9Hits ~400 MB) — same token ×3 = 3× credits. Viewers are CPU (Xvfb/Chromium) so they don't burn GPU quota; only the dummy ping uses GPU.
-
-## Resource notes
-
-- **ZeroGPU free quota**: 3.5 min/day (unauth 2 min), Pro 8×. Viewers **don't** use quota (CPU). Only `⚡ Ping` burns 10s per click — negligible. Don't wrap viewer loops in `@spaces.GPU` or you'll exhaust quota in minutes.
-- **If on Render 512 MB**: set `FEELINGSURF_INSTANCES=1`, `LOW_MEMORY=extreme`, `DUAL_VIEWER_MODE=concurrent` (already in `koyeb.yaml`/`render.yaml`). HF ZeroGPU 16GB needs no extreme.
-- **Python**: pin `3.10` or `3.12` for ZeroGPU (HF default). Our example uses `3.10`.
+The optional ZeroGPU ping button is only a hardware check. 9Hits and
+FeelingSurf run outside `@spaces.GPU`, so normal viewer activity does not use
+GPU quota.
 
 ## Troubleshooting
 
-- `ACCESS_KEY missing` → red banner; secret typo or not set.
-- `FeelingSurf auth failed` → check `ACCESS_TOKEN` case; alias `access_token` works via app.
-- `nhviewer/FeelingSurf not found` → no network at boot or missing `xvfb`/`wget`; check Build logs, **Restart Space**. Downloads cached to `/tmp`.
-- `Xvfb not found` → ensure `xvfb` in `packages.txt` (already).
-- `spaces not installed` → `pip install spaces` missing; we stub it as no-op, but add `spaces>=0.30.0` to `requirements.txt` (already) and rebuild.
-- `ZeroGPU hardware / no GPU` → Space hardware is still **CPU Basic**; switch to **ZeroGPU**: Settings → Hardware → **ZeroGPU** (free). Requires `sdk: gradio` + at least one `@spaces.GPU` (we have `_zerogpu_ping`).
-- `GPU quota exceeded` → you wrapped viewer in `@spaces.GPU` or spammed Ping; wait 24h reset or upgrade to Pro. Keep viewers CPU.
-- `Duplicate USER on IP` (9Hits) → added proxy sessions without `EX_PROXY_URL`; keep `EX_PROXY_SESSIONS=0`.
-- `OOM` on ZeroGPU 16GB with 1+3? Never — if you set `5×` and see restarts, lower to 3 or set `LOW_MEMORY=extreme`.
-
-## Files
-
-- `app_hf.py` — main HF FREE 1+3 ZeroGPU Gradio app (also `gradio_app.py` etc.)
-- `app.py` — legacy 9Hits-only (kept)
-- `health_server.py` / `memguard.py` / `run_pty.py` / `feelingsurf-run.sh`
-- `packages.txt` — HF ZeroGPU apt (xvfb, libgtk-3-0, libnotify4, …)
-- `requirements.txt` — `gradio>=4.44.0` + `spaces>=0.30.0` (ZeroGPU)
-
-Enjoy free hits on ZeroGPU! 🌐⚡
+- **`ACCESS_KEY` missing:** check that `app_hf.py` is the app file; the built-in
+  value is applied during import unless a blank override is supplied.
+- **FeelingSurf auth failure:** check that `ACCESS_TOKEN` is not overriding the
+  built-in value with a stale token. The app exports both uppercase and
+  lower-case token names.
+- **Binary download failure:** restart the Space after confirming outbound
+  network access. Downloads are retried by the supervisor.
+- **`Xvfb` missing:** rebuild with `xvfb` present in `packages.txt`.
+- **Need memory protection on a small service:** deploy the Dockerfile path for
+  Render/Koyeb instead. Do not copy its `LOW_MEMORY=extreme` settings into the
+  HF app; HF is intentionally native.
