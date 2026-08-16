@@ -13,21 +13,31 @@
 
 FROM 9hitste/appv6
 
-# The health server and the PTY wrapper are pure stdlib Python.
-# Debian/Ubuntu based images usually ship python3 already; install it if not.
+ARG FSVIEWER_VERSION=2.5.2
+
+# Add the official FeelingSurf application to the 9Hits image. Both upstream
+# viewers are Debian/Ubuntu applications, so they can safely share this image
+# and its Chromium/X11 libraries. Pinning the release keeps builds repeatable.
 RUN set -eux; \
-    if command -v python3 >/dev/null 2>&1; then \
-        echo "python3 already present: $(python3 --version)"; \
-    elif command -v apt-get >/dev/null 2>&1; then \
-        apt-get update \
-        && apt-get install -y --no-install-recommends python3 \
-        && rm -rf /var/lib/apt/lists/*; \
-    elif command -v apk >/dev/null 2>&1; then \
-        apk add --no-cache python3; \
-    else \
-        echo "ERROR: cannot locate apt-get or apk to install python3" >&2; \
-        exit 1; \
-    fi
+    command -v apt-get >/dev/null 2>&1 || { \
+        echo "ERROR: the 9Hits base image must provide apt-get" >&2; exit 1; \
+    }; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        python3 ca-certificates wget util-linux \
+        libasound2 libgbm1 libgtk-3-0 libnotify4 libnss3 libsecret-1-0 \
+        libxss1 libxtst6 xdg-utils xvfb; \
+    getent group audio >/dev/null || groupadd -r audio; \
+    getent group fsviewer >/dev/null || groupadd -r fsviewer; \
+    id fsviewer >/dev/null 2>&1 || useradd -r -m -g fsviewer -G audio fsviewer; \
+    echo 'pcm.!default {\n  type plug\n  slave.pcm "null"\n}' > /etc/asound.conf; \
+    arch="$(dpkg --print-architecture)"; \
+    wget -q -O /tmp/feelingsurf.deb \
+      "https://github.com/feelingsurf/viewer/releases/download/${FSVIEWER_VERSION}/FeelingSurfViewer-linux-${arch}-${FSVIEWER_VERSION}.deb"; \
+    dpkg -i /tmp/feelingsurf.deb || apt-get install -f -y --no-install-recommends; \
+    test -x /usr/bin/FeelingSurfViewer; \
+    rm -f /tmp/feelingsurf.deb; \
+    rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/* /tmp/* /var/tmp/*
 
 WORKDIR /
 
@@ -35,14 +45,22 @@ COPY start.sh        /start.sh
 COPY run_pty.py      /run_pty.py
 COPY health_server.py /health_server.py
 COPY fetch_proxy_list.py /fetch_proxy_list.py
+COPY feelingsurf-run.sh /feelingsurf-run.sh
 
-RUN chmod +x /start.sh /run_pty.py /health_server.py /fetch_proxy_list.py
+RUN chmod +x /start.sh /run_pty.py /health_server.py /fetch_proxy_list.py /feelingsurf-run.sh
 
 ENV PORT=10000 \
+    FEELINGSURF_PORT=3000 \
+    FEELINGSURF_ENABLED=yes \
     SUPERVISOR_DELAY=10
 
-# Replace the upstream entrypoint: /start.sh launches BOTH the 9Hits viewer
-# (under a PTY, supervised + auto-restarted) and the /health HTTP server.
+EXPOSE 10000 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+    CMD wget -q --spider "http://localhost:${PORT}/health" || exit 1
+
+# Replace the upstream entrypoint: /start.sh launches BOTH viewers
+# (supervised + auto-restarted) and the combined /health HTTP server.
 # Extra docker/start-command arguments are forwarded to /nh.sh as flags.
 ENTRYPOINT ["/start.sh"]
 CMD []

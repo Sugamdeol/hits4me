@@ -29,10 +29,10 @@ Each provider assigns an isolated, clean datacenter outbound IP address:
 | Platform | Free Tier Type | Resources | Outbound Region / IP | Deployment Method |
 | :--- | :--- | :--- | :--- | :--- |
 | **Hugging Face Spaces** | **100% Free (Gradio SDK)** | **16 GB RAM**, 2 vCPU | US / EU (AWS) | Free Gradio Space (`app.py`) |
-| **Koyeb** | **100% Free (Nano Service)** | 512 MB RAM, 0.1 vCPU | Frankfurt, Washington D.C., Singapore | Docker (`koyeb.yaml`) |
+| **Koyeb** | Deploy this repository Dockerfile and set both secrets. | Uses `koyeb.yaml`; one service runs both viewers. |
 | **Render** | **100% Free (Web Service)** | 512 MB RAM, 750 hrs/mo | Oregon, Ohio, Frankfurt, Singapore | Docker (`render.yaml`) |
 | **Oracle Cloud Always Free** | **100% Forever Free** | **24 GB RAM**, 4 ARM cores | Your chosen home region | `docker compose up -d` |
-| **Fly.io** | Free Allowance | Up to 3 shared VMs (256 MB) | 30+ Global Regions | `fly.toml` |
+| **Fly.io** | Deploy this repository Dockerfile and set both secrets. | Uses `fly.toml`; one service runs both viewers. |
 | **Zeabur / Railway** | Free Trial / Starter credits | 512 MB RAM | Global Edge | `zeabur.json` / `railway.json` |
 
 ---
@@ -76,7 +76,7 @@ Each provider assigns an isolated, clean datacenter outbound IP address:
 ### 3. Render (100% Free Docker Web Service)
 1. In [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** (connect this repo).
 2. Or create **New → Web Service** → Docker runtime → Free tier.
-3. Paste `ACCESS_KEY` when prompted.
+3. Paste both `ACCESS_KEY` and `ACCESS_TOKEN` when prompted.
 4. Set Environment Variables:
    ```env
    ACCESS_KEY=<your-key>
@@ -99,11 +99,8 @@ cp .env.example .env
 # Edit .env and set ACCESS_KEY (9Hits) AND/OR ACCESS_TOKEN (FeelingSurf)
 nano .env
 
-# Start 9Hits only (default):
+# Start BOTH viewers in one container/deployment:
 docker compose up -d
-
-# Or start BOTH viewers:
-docker compose --profile feelingsurf up -d
 ```
 
 ---
@@ -111,7 +108,7 @@ docker compose --profile feelingsurf up -d
 ### 5. Fly.io
 1. Install `flyctl`: `curl -L https://fly.io/install.sh | sh`
 2. Run `fly launch` in this directory (uses `fly.toml`).
-3. Set your secret: `fly secrets set ACCESS_KEY="<your-access-key>"`.
+3. Set both secrets: `fly secrets set ACCESS_KEY="<your-9hits-key>" ACCESS_TOKEN="<your-feelingsurf-token>"`.
 4. Deploy: `fly deploy`.
 
 ---
@@ -136,8 +133,8 @@ docker run -d \
 ```
 That's it — no apt deps, no flags, no proxy list to maintain. The container starts Xvfb internally, launches the viewer, and exposes its UI on **`http://<host>:3000/`**. The image's built-in Docker `HEALTHCHECK` pings that endpoint every minute.
 
-### 2. `docker compose` (run alongside 9Hits)
-The official `docker run` is already wired into `docker-compose.yml` as the `feelingsurf` service on the `feelingsurf` **profile**. The existing `9hits` service stays default-on for backwards compatibility:
+### 2. `docker compose` (same container as 9Hits)
+The repository Dockerfile installs FeelingSurf alongside 9Hits. One Compose service and one deploy now run both viewers:
 
 ```bash
 cp .env.example .env
@@ -145,31 +142,30 @@ cp .env.example .env
 #   ACCESS_KEY=...
 #   ACCESS_TOKEN=...
 
-docker compose up -d                                # 9Hits only  (existing behavior)
-docker compose --profile feelingsurf up -d          # BOTH viewers (recommended on Oracle Cloud)
-docker compose --profile feelingsurf up -d feelingsurf   # FeelingSurf alone
+docker compose up -d                                # both viewers, one container
+curl http://localhost:10000/health                  # combined status
+# Set FEELINGSURF_ENABLED=no only when you intentionally want 9Hits alone.
 ```
 
 Service map:
-| Service | Profile | Image | Health |
-| :--- | :--- | :--- | :--- |
-| `9hits` | *(none — default)* | built from `./Dockerfile` | `GET /health` on port `10000` |
-| `feelingsurf` | `feelingsurf` (opt-in) | `feelingsurf/viewer:stable` | `GET /` on port `3000` (image's built-in `HEALTHCHECK`) |
+| Container | Processes | Health |
+| :--- | :--- | :--- |
+| `viewers` | supervised 9Hits + supervised FeelingSurf | combined `GET /health` on port `10000`; FeelingSurf also listens internally on `3000` |
 
-Both services bind the same host port (`10000` / `3000`) — if you run them on the **same** host at the same time, no clash (different ports), and each uses ~2 GB RAM + tmpfs on `/tmp` and `/dev/shm`.
+The platform deploys one image once. Both viewers share the container network and `/dev/shm`, while independent supervisors restart either process if it exits. Budget at least **4 GB RAM and 2 CPUs** for reliable operation; small free instances may run out of memory.
 
 ### 3. Free cloud platforms
 
-The **official image already works on free platforms** — no custom Dockerfile required. Use the platform's "image" / "registry" deployment (instead of "Dockerfile").
+The combined repository `Dockerfile` is used on cloud platforms. Configure both `ACCESS_KEY` and `ACCESS_TOKEN` on the same service.
 
 | Platform | Deployment | Notes |
 | :--- | :--- | :--- |
-| **Oracle Cloud Always Free** | use `docker compose --profile feelingsurf up -d` (same `docker-compose.yml`) | Two services, ~3 GB RAM each — well within the 24 GB free tier. |
-| **Render** | Blueprint (`render.yaml`) auto-deploys both: **9hits-viewer** (web, port `10000`) and **feelingsurf-viewer** (background, port `3000`). Free plan fits both in one account: 1 web + 1 background slot. Both `ACCESS_KEY` and `access_token` are prompted as secrets during deploy. | Plug-and-play via `render.yaml` — no extra config needed. |
-| **Koyeb** | `Create App → Docker Image → feelingsurf/viewer:stable`. Set env `access_token`. Ports/HTTP check: `port 3000`. | `feelsurf-koyeb.yaml` is included. |
-| **Fly.io** | `fly launch --image feelingsurf/viewer:stable`. Set secret: `fly secrets set access_token=...`. Internal port `3000`. | `feelsurf-fly.toml` is included. |
-| **Railway** | Create a service from public image `feelingsurf/viewer:stable`. Variables: `access_token`. | `feelsurf-railway.json` is included. |
-| **Zeabur** | Create service from image `feelingsurf/viewer:stable`. env: `access_token`, port `3000`. | `feelsurf-zeabur.json` is included. |
+| **Oracle Cloud Always Free** | use `docker compose up -d` | One combined service; the 24 GB tier has ample memory. |
+| **Render** | Blueprint (`render.yaml`) deploys one **hits4me-viewers** web service containing both viewers. Both secrets are prompted. | The free 512 MB plan is unlikely to have enough RAM; use a plan with at least 4 GB. |
+| **Koyeb** | Deploy this repository Dockerfile and set both secrets. | Uses `koyeb.yaml`; one service runs both viewers. |
+| **Fly.io** | Deploy this repository Dockerfile and set both secrets. | Uses `fly.toml`; one service runs both viewers. |
+| **Railway** | Deploy this repository Dockerfile and set both secrets. | Uses `railway.json`; one service runs both viewers. |
+| **Zeabur** | Deploy this repository Dockerfile and set both secrets. | Uses `zeabur.json`; one service runs both viewers. |
 | **Hugging Face Spaces** | Docker Space; image `feelingsurf/viewer:stable` (paid Docker Space required). | For the 100% free Gradio Space path, run the **9Hits** viewer (`app.py`) and use a second space / external host for FeelingSurf. |
 
 Recommended platform sizing per FeelingSurf container (per the [official repo](https://github.com/feelingsurf/docker-viewer)):

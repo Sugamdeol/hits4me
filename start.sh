@@ -157,6 +157,41 @@ supervisor() {
 supervisor &
 export SUPERVISOR_PID=$!
 
-log "9hits viewer supervisor pid=$SUPERVISOR_PID"
-log "health endpoint on 0.0.0.0:$PORT (GET /health)"
+# FeelingSurf runs in this same container/deployment. Keep it under a separate
+# supervisor so either viewer can restart without taking down the other one.
+feelingsurf_supervisor() {
+  trap 'log "FeelingSurf supervisor stopped"; exit 0' TERM INT
+  while :; do
+    log "launching FeelingSurf viewer"
+    runuser -u fsviewer -- "$SCRIPT_DIR/feelingsurf-run.sh" &
+    local fpid=$!
+    echo "$fpid" > /tmp/feelingsurf.pid
+    wait "$fpid"
+    local code=$?
+    rm -f /tmp/feelingsurf.pid
+    local restarts=0
+    [ -f /tmp/feelingsurf.restarts ] && restarts=$(cat /tmp/feelingsurf.restarts 2>/dev/null || echo 0)
+    echo $((restarts + 1)) > /tmp/feelingsurf.restarts
+    log "FeelingSurf exited (code $code) - restarting in ${SUPERVISOR_DELAY:-10}s"
+    sleep "${SUPERVISOR_DELAY:-10}" & wait $!
+  done
+}
+
+case "${FEELINGSURF_ENABLED:-yes}" in
+  0|no|false|off)
+    export FEELINGSURF_SUPERVISOR_PID=0
+    log "FeelingSurf disabled by FEELINGSURF_ENABLED=${FEELINGSURF_ENABLED}"
+    ;;
+  *)
+    if [ -z "${access_token:-${ACCESS_TOKEN:-}}" ]; then
+      log "WARNING: ACCESS_TOKEN is not set - FeelingSurf cannot authenticate"
+    fi
+    feelingsurf_supervisor &
+    export FEELINGSURF_SUPERVISOR_PID=$!
+    ;;
+esac
+
+log "9Hits supervisor pid=$SUPERVISOR_PID"
+[ "${FEELINGSURF_SUPERVISOR_PID:-0}" -gt 1 ] && log "FeelingSurf supervisor pid=$FEELINGSURF_SUPERVISOR_PID"
+log "combined health endpoint on 0.0.0.0:$PORT (GET /health)"
 exec python3 "$SCRIPT_DIR/health_server.py"

@@ -1,4 +1,4 @@
-# fly.toml app configuration file for 9Hits Viewer
+# fly.toml app configuration for the combined 9Hits + FeelingSurf viewer
 # Docs: https://fly.io/docs/reference/configuration/
 
 app = "hits4me-9hits"
@@ -9,6 +9,7 @@ primary_region = "iad"
 
 [env]
   PORT = "10000"
+  FEELINGSURF_ENABLED = "yes"
   CLEAR_ALL_SESSIONS = "yes"
   SYSTEM_SESSION = "yes"
   SESSION_NOTE = "fly-system"
@@ -42,6 +43,7 @@ primary_region = "iad"
     path = "/health"
 
 [[vm]]
-  memory = "512mb"
+  # Both Chromium-based viewers need substantially more than 512 MB together.
+  memory = "4gb"
   cpu_kind = "shared"
-  cpus = 1
+  cpus = 2
