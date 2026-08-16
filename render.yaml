@@ -5,9 +5,10 @@
 #   1. 9hits-viewer  (web)     - the managed 9Hits viewer on port 10000
 #   2. feelingsurf-viewer (bg) - the auto-surf FeelingSurf viewer (port 3000)
 #
-# Access keys are prompted as secrets during the first deploy.
+# ACCESS_KEY is prompted as a secret during the first deploy.
+# access_token is pre-configured below.
+#
 #   ACCESS_KEY  -> https://panel.9hits.com/user/profile
-#   access_token -> https://www.feelingsurf.fr/member (Profile -> API token)
 #
 # Docs: https://render.com/docs/blueprint-spec
 
@@ -88,6 +89,5 @@ services:
     image:
       url: feelingsurf/viewer:stable
     envVars:
-      # Required - prompted as a secret.
       - key: access_token
-        sync: false
+        value: "27f77ef00e768cdbdc7352f3456e35b5"
