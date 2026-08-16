@@ -1,5 +1,5 @@
 ---
-title: 9Hits Viewer v6
+title: 9Hits Viewer v6 + FeelingSurf Viewer
 emoji: 🌐
 colorFrom: blue
 colorTo: indigo
@@ -11,8 +11,12 @@ pinned: false
 
 # hits4me
 
-Run the **9Hits Viewer v6** ([9hitste/appv6](https://hub.docker.com/r/9hitste/appv6)) on
-**100% Free Cloud Hosting Platforms** (**Hugging Face Spaces, Koyeb, Render, Oracle Cloud Always Free, Fly.io, Railway, Zeabur**) as a lightweight service with an integrated **`/health` endpoint** for uptime monitoring.
+Run the **9Hits Viewer v6** ([9hitste/appv6](https://hub.docker.com/r/9hitste/appv6)) and the
+**FeelingSurf Viewer** ([feelingsurf/viewer](https://hub.docker.com/r/feelingsurf/viewer)) on
+**100% Free Cloud Hosting Platforms** (**Hugging Face Spaces, Koyeb, Render, Oracle Cloud Always Free, Fly.io, Railway, Zeabur**) as lightweight services with integrated **`/health` endpoints** for uptime monitoring.
+
+* **9Hits Viewer** — sophisticated traffic-exchange viewer with proxy/proxy-pool/system-session options.
+* **FeelingSurf Viewer** — drop-in autosurf viewer; one container, one env var (`access_token`), no extra configuration.
 
 ---
 
@@ -105,6 +109,77 @@ docker compose up -d
 2. Run `fly launch` in this directory (uses `fly.toml`).
 3. Set your secret: `fly secrets set ACCESS_KEY="<your-access-key>"`.
 4. Deploy: `fly deploy`.
+
+---
+
+## FeelingSurf Viewer (additional autosurf viewer)
+
+Hit "too many free platforms, no proxies" with 9Hits? Same repo can run the **FeelingSurf Viewer** ([feelingsurf/viewer:stable](https://hub.docker.com/r/feelingsurf/viewer)) alongside (or instead of) the 9Hits viewer. It's a self-contained Electron-style app — only `access_token` env var, no proxy-aware flags, no dashboards to configure.
+
+⚠️ **Disclaimer:** *Never share your FeelingSurf `access_token` — it grants full access to your account.*
+
+### Get an access token
+1. Register at [feelingsurf.fr](https://www.feelingsurf.fr/) and finish email confirmation.
+2. Go to **Member area → Profile / Settings → API / Access Token** and generate one. (The token is a long opaque string — treat it like a password.)
+
+### 1. `docker run` (the official quick start)
+```bash
+docker run -d \
+  -e access_token=YOUR_ACCESS_TOKEN_HERE \
+  --tmpfs /tmp \
+  --tmpfs /dev/shm \
+  feelingsurf/viewer:stable
+```
+That's it — no apt deps, no flags, no proxy list to maintain. The container starts Xvfb internally, launches the viewer, and exposes its UI on **`http://<host>:3000/`**. The image's built-in Docker `HEALTHCHECK` pings that endpoint every minute.
+
+### 2. `docker compose` (run alongside 9Hits)
+The official `docker run` is already wired into `docker-compose.yml` as the `feelingsurf` service on the `feelingsurf` **profile**. The existing `9hits` service stays default-on for backwards compatibility:
+
+```bash
+cp .env.example .env
+# Fill in ACCESS_KEY (9Hits) AND/OR ACCESS_TOKEN (FeelingSurf), e.g.:
+#   ACCESS_KEY=...
+#   ACCESS_TOKEN=...
+
+docker compose up -d                                # 9Hits only  (existing behavior)
+docker compose --profile feelingsurf up -d          # BOTH viewers (recommended on Oracle Cloud)
+docker compose --profile feelingsurf up -d feelingsurf   # FeelingSurf alone
+```
+
+Service map:
+| Service | Profile | Image | Health |
+| :--- | :--- | :--- | :--- |
+| `9hits` | *(none — default)* | built from `./Dockerfile` | `GET /health` on port `10000` |
+| `feelingsurf` | `feelingsurf` (opt-in) | `feelingsurf/viewer:stable` | `GET /` on port `3000` (image's built-in `HEALTHCHECK`) |
+
+Both services bind the same host port (`10000` / `3000`) — if you run them on the **same** host at the same time, no clash (different ports), and each uses ~2 GB RAM + tmpfs on `/tmp` and `/dev/shm`.
+
+### 3. Free cloud platforms
+
+The **official image already works on free platforms** — no custom Dockerfile required. Use the platform's "image" / "registry" deployment (instead of "Dockerfile").
+
+| Platform | Deployment | Notes |
+| :--- | :--- | :--- |
+| **Oracle Cloud Always Free** | use `docker compose --profile feelingsurf up -d` (same `docker-compose.yml`) | Two services, ~3 GB RAM each — well within the 24 GB free tier. |
+| **Render** | `New → Web Service → Deploy an existing image → feelingsurf/viewer:stable`. Set env `access_token`. Health check: `GET /` on port `3000`. | `feelsurf-render.yaml` is included as a Blueprint if you prefer. |
+| **Koyeb** | `Create App → Docker Image → feelingsurf/viewer:stable`. Set env `access_token`. Ports/HTTP check: `port 3000`. | `feelsurf-koyeb.yaml` is included. |
+| **Fly.io** | `fly launch --image feelingsurf/viewer:stable`. Set secret: `fly secrets set access_token=...`. Internal port `3000`. | `feelsurf-fly.toml` is included. |
+| **Railway** | Create a service from public image `feelingsurf/viewer:stable`. Variables: `access_token`. | `feelsurf-railway.json` is included. |
+| **Zeabur** | Create service from image `feelingsurf/viewer:stable`. env: `access_token`, port `3000`. | `feelsurf-zeabur.json` is included. |
+| **Hugging Face Spaces** | Docker Space; image `feelingsurf/viewer:stable` (paid Docker Space required). | For the 100% free Gradio Space path, run the **9Hits** viewer (`app.py`) and use a second space / external host for FeelingSurf. |
+
+Recommended platform sizing per FeelingSurf container (per the [official repo](https://github.com/feelingsurf/docker-viewer)):
+
+* **RAM:** ~2 GB
+* **CPU:** ~2 cores  
+* **tmpfs:** `/tmp` and `/dev/shm`
+* **Port:** `3000` (in-viewer HTTP endpoint + Docker healthcheck)
+
+### 4. Why use FeelingSurf alongside 9Hits?
+
+* **Independent earnings / IP reputation:** even if a 9Hits proxy tripwire fires (`Auth: Duplicate USER on IP`), FeelingSurf keeps earning on the same cloud box.
+* **Different credit economy:** FeelingSurf awards credits independent of 9Hits, so you can pause one to focus budget on the other without affecting your account elsewhere.
+* **Trivial setup:** one env var, no proxy gymnastics.
 
 ---
 

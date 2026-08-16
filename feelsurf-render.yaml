@@ -1,0 +1,24 @@
+# Render Blueprint - FeelingSurf Viewer (https://hub.docker.com/r/feelingsurf/viewer)
+#
+# Uses Render's "image-based" service to deploy the official container directly
+# (no custom Dockerfile required). Render's free tier health check path must
+# point at the viewer HTTP endpoint that the container already serves on 3000.
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> connect this repo.
+# SECURITY: paste `access_token` as a secret when prompted.
+
+services:
+  - type: web
+    name: feelingsurf-viewer
+    runtime: image
+    plan: free
+    image:
+      url: feelingsurf/viewer:stable
+    region: oregon
+    healthCheckPath: /
+    dockerCommand: ""
+    envVars:
+      # Required - prompted as a secret.
+      # Get one at https://www.feelingsurf.fr/member (Profile -> API token).
+      - key: access_token
+        sync: false
