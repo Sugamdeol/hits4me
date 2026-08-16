@@ -15,7 +15,7 @@ services:
     environment:
       PORT: "10000"
       FEELINGSURF_PORT: "3000"
-      NINEHITS_ENABLED: "${NINEHITS_ENABLED:-no}"
+      NINEHITS_ENABLED: "${NINEHITS_ENABLED:-yes}"
       FEELINGSURF_ENABLED: "${FEELINGSURF_ENABLED:-yes}"
       # 512MB dual-viewer management (see README): LOW_MEMORY flags + memguard
       # memory guardian; auto falls back to time-slicing the two viewers.
@@ -51,6 +51,14 @@ services:
       SUPERVISOR_DELAY: "${SUPERVISOR_DELAY:-10}"
     tmpfs:
       - /tmp:size=512m,mode=1777
+    volumes:
+      # Per-service logs (logs/9hits.log, logs/feelingsurf.log, logs/memguard.log,
+      # logs/health.log, logs/supervisor.log). Bind-mounting /logs onto the
+      # host keeps them across `docker compose up` / image rebuilds and lets
+      # the operator inspect each viewer's log without entering the
+      # container. A named volume is fine too; the entrypoint creates the
+      # directory if it is missing.
+      - ./logs:/logs
     logging:
       driver: json-file
       options:
