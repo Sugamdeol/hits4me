@@ -18,6 +18,15 @@ Run the **9Hits Viewer v6** ([9hitste/appv6](https://hub.docker.com/r/9hitste/ap
 * **9Hits Viewer** — sophisticated traffic-exchange viewer with proxy/proxy-pool/system-session options.
 * **FeelingSurf Viewer** — drop-in autosurf viewer; one container, one env var (`access_token`), no extra configuration.
 
+**Both viewers run simultaneously by default.** The image's `ENV` defaults
+turn on 9Hits + FeelingSurf at the same time (`DUAL_VIEWER_MODE=concurrent`,
+`LOW_MEMORY=extreme`), with per-viewer memory caps (`NH_MAX_MEMORY_MB=400`,
+`FS_MAX_MEMORY_MB=400`) and a 24x7 process manager (`supervisor.py`) that
+keeps each viewer alive independently. Just set `ACCESS_KEY` (9Hits) and
+`ACCESS_TOKEN` (FeelingSurf) and both viewers will run, restart on crash,
+and stay up indefinitely. To run only one viewer, set the corresponding
+`NINEHITS_ENABLED=no` or `FEELINGSURF_ENABLED=no`.
+
 ---
 
 ## Free Multi-Platform Strategy: Free System Sessions on Clean Cloud IPs
@@ -119,14 +128,16 @@ can OOM-kill the whole container. A cooldown prevents kill-thrash. With
 `DUAL_VIEWER_MODE=concurrent` + `extreme` the pair sits well under the
 threshold, so the guardian stays silent and both viewers run together.
 
-**Layer 3 — time-slice fallback (`DUAL_VIEWER_MODE`, default `auto`).**
-If the box really cannot fit both at once (3+ over-budget restarts inside
-10 min), memguard auto-switches to **time-slice**: the two viewers alternate,
-`TIME_SLICE` seconds each (default 1500 = 25 min), so only one Chromium is
-resident at a time — guaranteed to fit 512 MB, at the cost of ~50% uptime per
-viewer. The supervisors gate their launches on a turn file
-(`/tmp/active_viewer`) and **fail open**: if memguard dies, both viewers run
-freely (no deadlock). With `LOW_MEMORY=extreme` the fallback rarely triggers.
+**Layer 3 — time-slice fallback (`DUAL_VIEWER_MODE`, default `concurrent`).**
+The image's default is `concurrent` (both viewers at the same time).
+If you set `DUAL_VIEWER_MODE=auto` and the box really cannot fit both at once
+(3+ over-budget restarts inside 10 min), memguard auto-switches to
+**time-slice**: the two viewers alternate, `TIME_SLICE` seconds each (default
+1500 = 25 min), so only one Chromium is resident at a time — guaranteed to
+fit 512 MB, at the cost of ~50% uptime per viewer. The supervisors gate their
+launches on a turn file (`/tmp/active_viewer`) and **fail open**: if memguard
+dies, both viewers run freely (no deadlock). With `LOW_MEMORY=extreme` the
+fallback rarely triggers.
 
 | `DUAL_VIEWER_MODE` | Behaviour |
 | :--- | :--- |
@@ -146,9 +157,109 @@ server, ~0 MB of RAM (a static page that polls `/health` every 2 s):
   a **countdown to the next time-slice flip**.
 * **Viewers card** — running state, phase/pid, silent seconds, restarts for
   each viewer and the memguard intervention counter.
+* **Per-slot controls** — Start / Stop / Restart buttons for the 9Hits
+  slot, the FeelingSurf slot, the memguard slot, and the health server
+  itself (the buttons POST to `/control/<name>/<action>` and the
+  supervisor picks up the request on its next tick).
+* **Log tails** — last 4 KB of `logs/9hits.log` and `logs/feelingsurf.log`
+  inlined, so you can see which service produced an error without
+  `docker exec`-ing into the container.
 
 It is served by the same health server, so it works on Render free (which only
 exposes `$PORT`), Koyeb, Fly, Railway, Zeabur and local compose alike.
+
+## Process manager & per-viewer controls (24x7 operation)
+
+The container is owned by a tiny stdlib Python supervisor (`supervisor.py`).
+It is the **PID 1** process inside the container - it does not depend on
+any web request, Gradio activity, or external keep-alive. It runs an
+internal 500 ms loop, reaps every long-lived child directly, and
+restarts crashed slots independently. The result is that both viewers
+stay up for as long as the container is running, with full 24x7
+operation.
+
+### Properties
+
+* **One slot per service** — `ninehits`, `feelingsurf`, `memguard`, `health`.
+  Each is an independent `ManagedSlot` instance in `supervisor.py` and
+  each has its own PID, log file, restart counter, and exponential
+  backoff state.
+* **Independent restarts** — when 9Hits crashes, only the 9Hits slot is
+  relaunched after `SUPERVISOR_DELAY` seconds; FeelingSurf and the health
+  server keep running untouched, with their PIDs unchanged.
+* **Exponential backoff** — a slot that keeps crashing within seconds sees
+  its delay grow (`10 → 20 → 40 → 80 → 120 s`) up to
+  `SUPERVISOR_MAX_DELAY` (default 120 s), so a broken deploy cannot
+  burn the host's CPU. After `SUPERVISOR_PARK_AFTER` (default 10) rapid
+  crashes the slot is parked for `SUPERVISOR_PARK_SECS` (default 300 s)
+  before the next try; it still recovers automatically once the
+  underlying issue clears.
+* **No duplicate processes** — the `ManagedSlot.start()` method first
+  checks that no proc object is already alive for the slot, and on
+  container start the supervisor also scans `/proc` for matching
+  viewer exes (`nhviewer`, `may`, `chrome`, `electron`,
+  `FeelingSurfViewer`) and refuses to launch a second instance.
+  Rapid-fire `start` requests via the dashboard or `curl` collapse to
+  one actual start.
+* **Per-slot memory cap** — `NH_MAX_MEMORY_MB` / `NINEHITS_MAX_MEMORY_MB`
+  and `FS_MAX_MEMORY_MB` / `FEELINGSURF_MAX_MEMORY_MB` set a soft cap
+  on the slot's process tree RSS. When a viewer exceeds its cap, the
+  supervisor gracefully restarts **only that slot** (the other one
+  keeps running). Default = 0 (off). Sensible values on a 512 MB free
+  plan: `400` for both. This is independent of the total-RSS
+  `memguard.py`; the per-slot cap catches a single runaway viewer
+  before it can crash the cgroup.
+* **Per-slot child-count cap** — `NH_MAX_CHILDREN` /
+  `NINEHITS_MAX_CHILDREN` and the FS equivalents guard against fork
+  bombs (a Chromium that started spawning helper processes
+  indefinitely). Default = 0 (off).
+* **Lightweight monitoring loop** — the main loop ticks at
+  `SUPERVISOR_TICK` (default 0.5 s) for fast signal/crash response.
+  The expensive per-slot checks (memory + child count) run at
+  `NINEHITS_CHECK_INTERVAL` / `FEELINGSURF_CHECK_INTERVAL`
+  (default 30 s) so the steady-state CPU cost stays near zero.
+* **Log rotation** — every slot rotates its log when it exceeds
+  `SLOT_LOG_MAX_BYTES` (default 10 MiB), keeping `SLOT_LOG_BACKUPS`
+  copies (default 2). Worst case for five slots: 150 MiB of logs.
+* **Clean shutdown** — `docker stop` (or `kill -TERM`, or `kill -INT`,
+  or `kill -QUIT`, or `kill -HUP` on the supervisor) makes the
+  supervisor forward the signal to every child, wait their
+  `stop_grace` (15 s for FS, 20 s for 9Hits), then SIGKILL anything
+  still alive. The health endpoint reports `status: "error"` and 503
+  the moment the supervisor dies. No orphan children are left.
+* **Per-slot log files** — every child writes to
+  `logs/<name>.log` AND to the docker stdout stream. The
+  `LOG_DIR=/logs` directory is bind-mounted by `docker-compose.yml`,
+  and on Render/Koyeb it lives inside the container (still readable
+  with `docker exec <id> cat /logs/9hits.log`).
+* **Per-viewer resource caps (optional)** —
+  `NH_CPU_SHARES` / `FS_CPU_SHARES` (Linux cgroup v1 weight). Set
+  them in the Blueprint / env when you want to give 9Hits a strict
+  CPU budget so it cannot starve FeelingSurf.
+
+Runtime control (also exposed by the dashboard buttons):
+
+```bash
+# Start, stop, or restart a managed slot
+curl -X POST http://localhost:10000/control/ninehits/restart
+curl -X POST http://localhost:10000/control/feelingsurf/stop
+curl -X POST http://localhost:10000/control/memguard/start
+
+# Tail the last 4 KB of any slot's log
+curl http://localhost:10000/logs/9hits
+curl http://localhost:10000/logs/feelingsurf
+curl http://localhost:10000/logs/memguard
+curl http://localhost:10000/logs/supervisor
+
+# Full supervisor snapshot (debug)
+curl http://localhost:10000/slots | python3 -m json.tool
+```
+
+The supervisor is the only long-lived process in the container. There is
+no shell at the top of the process tree to leak environment variables or
+turn into an orphan — every child is reaped by the supervisor and the
+final exit code of each managed process is recorded in
+`/tmp/supervisor_state.json`.
 
 ## Measured memory (real Chromium 149, this repo's flags)
 
@@ -399,7 +510,24 @@ Viewer config flags are applied by the **init pass** (`nhviewer <flags> --exit-o
 | `HIDE_COLUMNS` | `--hide-columns` | *none* | Dashboard columns to hide, e.g. `quality,points` |
 | `RESET_INTERVAL` | `--reset-interval` (run pass) | `2h` | Graceful self-restart interval (`2h`, `6h`, `30m`) |
 | `PORT` | — | `10000` | Port for `/health` endpoint |
-| `SUPERVISOR_DELAY` | — | `10` | Seconds before relaunching an exited viewer (alias: `RESTART_DELAY`) |
+| `SUPERVISOR_DELAY` | — | `10` | Base restart cooldown (s) before relaunching an exited slot (alias: `RESTART_DELAY`) |
+| `SUPERVISOR_MAX_DELAY` | — | `120` | Ceiling for the exponential backoff when a slot keeps crash-looping |
+| `SUPERVISOR_PARK_AFTER` | — | `10` | After N rapid crashes the slot is parked (cooldown extended) |
+| `SUPERVISOR_PARK_SECS` | — | `300` | Park duration (s) when a slot is parked. Slot still recovers automatically |
+| `SUPERVISOR_TICK` | — | `0.5` | Main loop tick (s). Lower = faster signal/crash response, slightly higher steady-state CPU |
+| `NINEHITS_CHECK_INTERVAL` | — | `30` | Seconds between expensive 9Hits checks (memory, child count) |
+| `FEELINGSURF_CHECK_INTERVAL` | — | `30` | Seconds between expensive FeelingSurf checks |
+| `LOG_DIR` | — | `/logs` | Per-slot log directory. `logs/9hits.log`, `logs/feelingsurf.log`, `logs/memguard.log`, `logs/health.log`, `logs/supervisor.log` |
+| `SLOT_LOG_MAX_BYTES` | — | `10485760` | Rotate per-slot log when it exceeds this size |
+| `SLOT_LOG_BACKUPS` | — | `2` | Number of rotated copies to keep per slot |
+| `NH_MAX_MEMORY_MB` / `NINEHITS_MAX_MEMORY_MB` | — | `0` | Per-slot memory cap (RSS of the process tree). When exceeded, gracefully restart ONLY 9Hits. Sensible value on 512 MB free: `400` |
+| `FS_MAX_MEMORY_MB` / `FEELINGSURF_MAX_MEMORY_MB` | — | `0` | Same for FeelingSurf. Sensible value on 512 MB free: `400` |
+| `NH_MAX_CHILDREN` / `NINEHITS_MAX_CHILDREN` | — | `0` | Refuse a 9Hits slot whose process tree has more than N children (fork-bomb guard) |
+| `FS_MAX_CHILDREN` / `FEELINGSURF_MAX_CHILDREN` | — | `0` | Same for FeelingSurf |
+| `NH_CPU_SHARES` | — | *none* | Linux cgroup v1 CPU weight for the 9Hits slot (1-262144) |
+| `FS_CPU_SHARES` | — | *none* | Linux cgroup v1 CPU weight for the FeelingSurf slot |
+| `NH_MEM_LIMIT_MB` | — | *none* | Legacy alias for `NH_MAX_MEMORY_MB` (kept for back-compat) |
+| `FS_MEM_LIMIT_MB` | — | *none* | Legacy alias for `FS_MAX_MEMORY_MB` (kept for back-compat) |
 | `EXTRA_ARGS` | — | *none* | Extra raw flags appended to the init pass |
 | `DEFAULT_DL` | — | *none* | Download a different viewer build from this URL at container start |
 | `NH_DISPLAY` | — | `:99` | X display number used for the 9Hits Xvfb |
@@ -424,32 +552,86 @@ GET https://<your-service>/health
 ```json
 {
   "service": "hits4me-combined-viewer",
-  "version": "3.0.0",
-  "status": "ok",
-  "viewer_enabled": true,
-  "viewer_running": true,
+  "version": "3.3.0",
+  "status": "ok",                       // "ok" | "degraded" | "restarting" | "error"
+  "ninehits": {
+    "status": "running",                // "running" | "stopped" | "crashed" |
+                                        // "parked" | "starting" | "stopping" | "disabled"
+    "running": true,                    // convenience boolean for uptime bots
+    "enabled": true,
+    "pid": 42,
+    "uptime": "20m34s",                 // human-readable
+    "uptime_seconds": 1234,
+    "restarts": 0,
+    "last_exit_code": null,
+    "last_error": null,
+    "memory_mb": 110.2,                // slot's process tree RSS
+    "child_count": 7,                  // slot's process tree size
+    "max_memory_mb": 400,              // 0 = no cap
+    "max_children": 0,
+    "check_interval_seconds": 30,
+    "log_file": "/logs/9hits.log"
+  },
+  "feelingsurf": {
+    "status": "running", "running": true, "enabled": true,
+    "pid": 17, "uptime": "9m0s", "uptime_seconds": 540,
+    "restarts": 1, "last_exit_code": null, "last_error": null,
+    "memory_mb": 198.6, "child_count": 9,
+    "max_memory_mb": 400, "max_children": 0,
+    "check_interval_seconds": 30,
+    "log_file": "/logs/feelingsurf.log"
+  },
   "supervisor_running": true,
-  "viewer_pid": 42,
-  "viewer_phase": "run",
-  "viewer_silent_seconds": 1,
-  "xvfb_running": true,
-  "restarts": 0,
-  "uptime_seconds": 3600,
-  "dual_viewer_mode": "auto",          // configured DUAL_VIEWER_MODE
-  "effective_mode": "time-slice",      // auto may escalate to time-slice
-  "active_viewer": "feelingsurf",      // who owns the RAM right now
-  "memory_used_mb": 412.5,             // total container RSS (memguard)
+  "supervisor_version": "2.0.0",
+  "ninehits_running": true,             // back-compat top-level booleans
+  "feelingsurf_running": true,          // (true | false | "disabled")
+  "memguard_status": "running", "memguard_pid": 12,
+  "health_status": "running", "health_pid": 1,
+  "dual_viewer_mode": "auto",
+  "effective_mode": "concurrent",
+  "active_viewer": "both",
+  "memory_used_mb": 312.4,             // total container RSS (memguard)
   "memory_limit_mb": 512,
-  "memory_peak_mb": 498.1,
-  "ninehits_rss_mb": 0.0,              // per-viewer unique memory, PSS
-  "feelingsurf_rss_mb": 331.2,
-  "memguard_interventions": 3          // times the heaviest viewer was restarted
+  "memory_peak_mb": 351.1,
+  "ninehits_rss_mb": 110.2,
+  "feelingsurf_rss_mb": 198.6,
+  "memguard_interventions": 0,
+  "uptime_seconds": 1234,
+  "low_memory": "extreme",
+  "slots": { /* full supervisor state per slot, used by the dashboard */ }
 }
 ```
 
-* `viewer_phase`: `init` = applying your config/sessions, `run` = viewer is up, `down` = between restarts.
-* `viewer_silent_seconds`: age of the last dashboard output. A large value together with rising `restarts` means the wedge watchdog is restarting a hung viewer.
-* The memory/mode block comes from `memguard.py` and is `null` when memguard is off. `effective_mode: "time-slice"` means the two viewers alternate; `"concurrent"` means both run at once.
+* `status`:
+  * `"ok"` — every enabled viewer is running.
+  * `"degraded"` — at least one viewer is up, another is down. The
+    supervisor is in control and will recover it automatically.
+  * `"restarting"` — both viewers enabled, neither up yet (very early
+    in the boot, or both crashed at the same time).
+  * `"error"` — the supervisor itself is gone (HTTP 503). Container
+    needs a full restart to recover.
+* Per-viewer `status` (inside the nested `ninehits` / `feelingsurf` object):
+  * `"running"` — the managed process is alive.
+  * `"stopped"` — the slot is enabled but the process is not running
+    (will be restarted by the supervisor on cooldown, or was stopped
+    by the operator).
+  * `"crashed"` — the process just died abnormally (last exit ≠ 0/TERM).
+  * `"parked"` — the slot is cooling off after too many rapid
+    crashes; the supervisor will retry once `SUPERVISOR_PARK_SECS`
+    elapse.
+  * `"starting"` / `"stopping"` — the supervisor is launching /
+    killing it right now.
+  * `"disabled"` — the slot is off by configuration.
+* `memory_mb` and `child_count` (per slot) are sampled at
+  `NINEHITS_CHECK_INTERVAL` / `FEELINGSURF_CHECK_INTERVAL` (default
+  30 s). They power the per-slot memory cap: when a slot's RSS
+  exceeds its `max_memory_mb` cap, the supervisor restarts only
+  that slot.
+* Backward-compat flat fields (`viewer_pid`, `viewer_phase`,
+  `viewer_silent_seconds`, `xvfb_running`, `restarts`, `viewer_running`,
+  `feelingsurf_running`, `feelingsurf_pid`, `feelingsurf_restart_count`,
+  `feelingsurf_supervisor_running`, ...) are still emitted so older
+  uptime bots do not break.
 
 Point any free uptime monitor (**UptimeRobot, Better Stack, Cron-job.org, Kuma**) to ping `https://<your-app>/health` every **5 to 10 minutes** to keep free-tier instances active and prevent sleep timeouts.
 

@@ -85,34 +85,62 @@ COPY health_server.py /health_server.py
 COPY memguard.py     /memguard.py
 COPY fetch_proxy_list.py /fetch_proxy_list.py
 COPY feelingsurf-run.sh /feelingsurf-run.sh
+COPY supervisor.py   /supervisor.py
 
-RUN chmod +x /start.sh /run_pty.py /health_server.py /memguard.py /fetch_proxy_list.py /feelingsurf-run.sh
+# Persistent per-service log directory (mounted by docker-compose, /logs on the
+# host when bind-mounting, or a tmpfs otherwise - the supervisor recreates
+# the directory on every start).
+RUN mkdir -p /logs && chmod 1777 /logs
+
+RUN chmod +x /start.sh /run_pty.py /health_server.py /memguard.py /fetch_proxy_list.py /feelingsurf-run.sh /supervisor.py
 
 # 512MB dual-viewer survival (see start.sh): LOW_MEMORY shrinks both
 # Chromiums, memguard.py restarts the heaviest viewer before the platform can
 # OOM the container, and auto mode alternates the viewers when they still
 # don't fit simultaneously (Render free = 512 MB).
+#
+# Defaults: BOTH viewers ON, both at the same time, with per-viewer memory
+# caps that gracefully restart a single runaway viewer. The 24x7 process
+# manager (supervisor.py) is the entrypoint and keeps everything alive
+# independently.
 ENV PORT=10000 \
     FEELINGSURF_PORT=3000 \
     FEELINGSURF_ENABLED=yes \
+    NINEHITS_ENABLED=yes \
     SUPERVISOR_DELAY=10 \
+    SUPERVISOR_MAX_DELAY=120 \
+    SUPERVISOR_PARK_AFTER=10 \
+    SUPERVISOR_PARK_SECS=300 \
+    SUPERVISOR_TICK=0.5 \
+    NINEHITS_CHECK_INTERVAL=30 \
+    FEELINGSURF_CHECK_INTERVAL=30 \
     NH_DIR=/opt/9hits \
     NH_DISPLAY=:99 \
     INIT_TIMEOUT=300 \
     NH_WATCHDOG=yes \
     NH_WATCHDOG_STUCK=600 \
-    DUAL_VIEWER_MODE=auto \
+    DUAL_VIEWER_MODE=concurrent \
     TIME_SLICE=1500 \
-    LOW_MEMORY=auto
+    LOW_MEMORY=extreme \
+    NH_MAX_MEMORY_MB=400 \
+    FS_MAX_MEMORY_MB=400 \
+    SLOT_LOG_MAX_BYTES=10485760 \
+    SLOT_LOG_BACKUPS=2 \
+    LOG_DIR=/logs
 
 EXPOSE 10000 3000 5901
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD wget -q --spider "http://localhost:${PORT}/health" || exit 1
 
-# /start.sh launches BOTH viewers (supervised + auto-restarted) plus the
-# Xvfb display for 9Hits, the combined /health HTTP server, and memguard.py
-# (memory guardian / time-slice scheduler for 512 MB plans).
-# Extra docker/start-command arguments are forwarded to the nhviewer init pass.
-ENTRYPOINT ["/start.sh"]
+# /supervisor.py is the new process manager: it owns one long-lived child
+# per slot (9Hits launcher, FeelingSurf launcher, memguard, health server)
+# and restarts each independently on crash. /start.sh is still in the image
+# for backwards compatibility (it can be run directly with `docker run ...`
+# and no extra arguments, and the ninehits-only mode is what the Python
+# supervisor invokes for the 9Hits slot).
+# Extra positional arguments (when /start.sh is the entrypoint) are forwarded
+# to the nhviewer init pass - existing deployments that pass flags this way
+# keep working.
+ENTRYPOINT ["/supervisor.py"]
 CMD []
