@@ -90,7 +90,7 @@ The Blueprint ships with **BOTH viewers enabled** (`NINEHITS_ENABLED=yes`, `FEEL
 1. In [Render Dashboard](https://dashboard.render.com/) apply the Blueprint for this repo so it updates the existing **`9hits-viewer`** service (or open that service and redeploy).
 2. Or, only if `9hits-viewer` does not already exist, create **New → Web Service** → Docker runtime → Free tier and name it exactly `9hits-viewer`.
 3. `ACCESS_KEY` and `ACCESS_TOKEN` are **hard-coded in `render.yaml`** — no prompting needed, just deploy.
-4. Default environment comes from the Blueprint: both viewers + `DUAL_VIEWER_MODE=auto` + `LOW_MEMORY=auto` + `MEMGUARD_LIMIT_MB=512` (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)). After deploy, check `GET /health` → `effective_mode` and `memory_used_mb` to see whether both viewers run concurrently or are being alternated.
+4. Default environment comes from the Blueprint: both viewers + `DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=extreme` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)). After deploy, check `GET /health` → `effective_mode` and `memory_used_mb` to see whether both viewers run concurrently.
 5. *(Optional)* Deploy another free service in a different region (e.g. Frankfurt or Ohio) to get an extra unique IP address.
 
 ---
@@ -141,8 +141,8 @@ fallback rarely triggers.
 
 | `DUAL_VIEWER_MODE` | Behaviour |
 | :--- | :--- |
-| `concurrent` | **Always run both at the same time** (pair with `LOW_MEMORY=extreme`, ~324 MB). The guardian is the safety valve only. |
-| `auto` (default) | Run both together; escalate to time-slice only if RAM proves too small. |
+| `concurrent` (default) | **Always run both at the same time** (pair with `LOW_MEMORY=extreme`, ~324 MB). The guardian is the safety valve only. |
+| `auto` | Run both together; escalate to time-slice only if RAM proves too small. |
 | `time-slice` | Alternate every `TIME_SLICE` seconds. Predictable ~50% uptime each, zero OOM risk. |
 | `off` | Legacy: no guardian, no slicing (two viewers can still OOM 512 MB plans). |
 
@@ -376,7 +376,7 @@ docker compose up -d
 
 ## FeelingSurf Viewer (additional autosurf viewer)
 
-Hit "too many free platforms, no proxies" with 9Hits? Same repo can run the **FeelingSurf Viewer** ([feelingsurf/viewer:stable](https://hub.docker.com/r/feelingsurf/viewer)) alongside (or instead of) the 9Hits viewer. It's a self-contained Electron-style app — only `access_token` env var, no proxy-aware flags, no dashboards to configure.
+Hit "too many free platforms, no proxies" with 9Hits? This repo runs the **FeelingSurf Viewer** alongside 9Hits in the same container — drop in an `access_token` and the supervisor keeps it alive 24×7. The combined image is the only deployment path; the upstream `feelingsurf/viewer:stable` standalone image is not used here.
 
 ⚠️ **Disclaimer:** *Never share your FeelingSurf `access_token` — it grants full access to your account.*
 
@@ -384,18 +384,8 @@ Hit "too many free platforms, no proxies" with 9Hits? Same repo can run the **Fe
 1. Register at [feelingsurf.fr](https://www.feelingsurf.fr/) and finish email confirmation.
 2. Go to **Member area → Profile / Settings → API / Access Token** and generate one. (The token is a long opaque string — treat it like a password.)
 
-### 1. `docker run` (the official quick start)
-```bash
-docker run -d \
-  -e access_token=YOUR_ACCESS_TOKEN_HERE \
-  --tmpfs /tmp \
-  --tmpfs /dev/shm \
-  feelingsurf/viewer:stable
-```
-That's it — no apt deps, no flags, no proxy list to maintain. The container starts Xvfb internally, launches the viewer, and exposes its UI on **`http://<host>:3000/`**. The image's built-in Docker `HEALTHCHECK` pings that endpoint every minute.
-
-### 2. `docker compose` (same container as 9Hits)
-The repository Dockerfile installs FeelingSurf alongside 9Hits. One Compose service and one deploy now run both viewers:
+### 1. `docker compose` (combined 9Hits + FeelingSurf in one container)
+The repository Dockerfile installs FeelingSurf alongside 9Hits. One Compose service and one deploy run both viewers at the same time:
 
 ```bash
 cp .env.example .env
@@ -422,19 +412,12 @@ The combined repository `Dockerfile` is used on cloud platforms. Configure both 
 | Platform | Deployment | Notes |
 | :--- | :--- | :--- |
 | **Oracle Cloud Always Free** | use `docker compose up -d` | One combined service; the 24 GB tier has ample memory. |
-| **Render** | Blueprint (`render.yaml`) updates the single existing **`9hits-viewer`** web service; `ACCESS_TOKEN` is preconfigured. **Both viewers enabled** (`NINEHITS_ENABLED=yes`) with `DUAL_VIEWER_MODE=auto` + `LOW_MEMORY=auto` + `MEMGUARD_LIMIT_MB=512`. | The 512 MB free plan is handled by the three-layer stack (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)): memory flags shrink both Chromiums, memguard restarts the heaviest viewer before the platform OOMs the container, and `auto` alternates the two if they still don't fit. |
+| **Render** | Blueprint (`render.yaml`) updates the single existing **`9hits-viewer`** web service; `ACCESS_TOKEN` is preconfigured. Both viewers are on by default, with `DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=extreme` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps. | The 512 MB free plan is handled by the three-layer stack (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)): memory flags shrink both Chromiums, memguard restarts the heaviest viewer before the platform OOMs the container, and the supervisor's per-slot memory cap restarts any single runaway viewer. |
 | **Koyeb** | ACCESS_KEY + ACCESS_TOKEN are hard-coded in `koyeb.yaml`. | Uses `koyeb.yaml`; one service runs both viewers. |
 | **Fly.io** | Deploy this repository Dockerfile and set both secrets. | Uses `fly.toml`; one service runs both viewers. |
 | **Railway** | Deploy this repository Dockerfile and set both secrets. | Uses `railway.json`; one service runs both viewers. |
 | **Zeabur** | Deploy this repository Dockerfile and set both secrets. | Uses `zeabur.json`; one service runs both viewers. |
 | **Hugging Face Spaces** | Standard Gradio Space; `app_hf.py` downloads and runs both viewers natively. | 16 GB runtime: 1× 9Hits system session + 3× FeelingSurf, with no memory guardian or low-memory tuning. |
-
-Recommended platform sizing per FeelingSurf container (per the [official repo](https://github.com/feelingsurf/docker-viewer)):
-
-* **RAM:** ~2 GB
-* **CPU:** ~2 cores  
-* **tmpfs:** `/tmp` and `/dev/shm`
-* **Port:** `3000` (in-viewer HTTP endpoint + Docker healthcheck)
 
 ### 4. Why use FeelingSurf alongside 9Hits?
 
@@ -477,7 +460,7 @@ Viewer config flags are applied by the **init pass** (`nhviewer <flags> --exit-o
 
 | Env var | `nhviewer` flag | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `NINEHITS_ENABLED` | — | `no` | `yes`/`no`/`1`/`0`/`true`/`false`/`on`/`off` — run the 9Hits viewer. Off by default for conservative bare deploys; the Render/Koyeb blueprints set `yes` because the 512 MB stack below keeps both viewers alive |
+| `NINEHITS_ENABLED` | — | `yes` | `yes`/`no`/`1`/`0`/`true`/`false`/`on`/`off` — run the 9Hits viewer. **Both viewers are ON by default** so a bare deploy starts 9Hits + FeelingSurf together. Set to `no` to run only FeelingSurf |
 | `FEELINGSURF_ENABLED` | — | `yes` | `yes`/`no`/`1`/`0`/`true`/`false`/`on`/`off` — run the FeelingSurf viewer (auto-disables quietly when the binary is absent, e.g. the HF Gradio runtime) |
 | `DUAL_VIEWER_MODE` | — | `auto` | `auto` / `concurrent` / `time-slice` / `off` — how the two viewers share one small box (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)); `concurrent` + `LOW_MEMORY=extreme` = both at the same time in 512 MB |
 | `TIME_SLICE` | — | `1500` | Seconds each viewer runs per turn in `time-slice` mode (25 min default) |
@@ -639,7 +622,7 @@ Point any free uptime monitor (**UptimeRobot, Better Stack, Cron-job.org, Kuma**
 
 ## Troubleshooting
 
-* **Render: `Ran out of memory (used over 512MB)` → "Service recovered" → repeat (~1/min)** — the classic symptom of two un-tuned Chromium viewers on the free 512 MB plan. The current Blueprint runs **both viewers** with the 512 MB survival stack (`DUAL_VIEWER_MODE=auto` + `LOW_MEMORY=auto` + `MEMGUARD_LIMIT_MB=512`), which keeps RSS under the limit: memguard restarts the heaviest viewer before the platform can kill the container, and auto mode alternates the two if they still don't fit. Check `/health` → `effective_mode` / `memory_used_mb` / `memguard_interventions`. If you still see OOM (e.g. a proxy list with many sessions), lower the session count, set `FEELINGSURF_ENABLED=no`, or move to a ≥ 2 GB plan (9Hits v6's official recommendation).
+* **Render: `Ran out of memory (used over 512MB)` → "Service recovered" → repeat (~1/min)** — the classic symptom of two un-tuned Chromium viewers on the free 512 MB plan. The current Blueprint runs **both viewers** with the 512 MB survival stack (`DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=extreme` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps), which keeps RSS under the limit: memguard restarts the heaviest viewer before the platform can kill the container, and the supervisor's per-slot memory cap restarts any single runaway viewer. Check `/health` → `effective_mode` / `memory_used_mb` / `memguard_interventions`. If you still see OOM (e.g. a proxy list with many sessions), lower the session count, set `FEELINGSURF_ENABLED=no`, or move to a ≥ 2 GB plan (9Hits v6's official recommendation).
 * **`Auth: Duplicate USER on IP [x.x.x.x]`** — Another 9Hits user is already using that public/shared proxy IP. Switch to a system session on a dedicated cloud provider, refresh your Webshare list, or use private proxies.
 * **`Auth: Duplicate SESSION on IP [x.x.x.x]`** — Multiple sessions from your account on the same IP. Ensure `SYSTEM_SESSION=no` when using proxies, or enable `CLEAR_ALL_SESSIONS=yes` to clear lingering connections.
 * **`Pool error: The public pool is closed!`** — Set `EX_PROXY_SESSIONS=0` (or unset it) and use `BULK_ADD_PROXY_LIST` / `BULK_ADD_PROXY_LIST_URL`, or provide your own custom pool via `EX_PROXY_URL`.
