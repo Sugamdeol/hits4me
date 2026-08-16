@@ -74,20 +74,19 @@ Each provider assigns an isolated, clean datacenter outbound IP address:
 ---
 
 ### 3. Render (100% Free Docker Web Service)
-The existing **`9hits-viewer`** web service ([dashboard](https://dashboard.render.com/web/srv-da09a7dbedkc73a829cg)) runs **both** the 9Hits and FeelingSurf viewers in one Docker container. Applying this repo's Blueprint updates that same service. It does **not** create a new Render service named `hits4me-viewers`.
+The existing **`9hits-viewer`** web service ([dashboard](https://dashboard.render.com/web/srv-da09a7dbedkc73a829cg)) runs **one** container. Applying this repo's Blueprint updates that same service only — it does **not** create any new Render service (there is exactly one service in `render.yaml`).
+
+By default this service runs **FeelingSurf-only + `/health`** (`NINEHITS_ENABLED=no`), because the 9Hits v6 + FeelingSurf pair (two Chromium viewers) **OOM-loops Render's free 512 MB plan** — `Ran out of memory (used over 512MB)` roughly every minute, followed by "Service recovered", in a repeating cycle. 9Hits v6 officially recommends ≥ 2 GB RAM. Opt in on a bigger plan with `NINEHITS_ENABLED=yes` (preferably with `FEELINGSURF_ENABLED=no`, or upgrade the plan).
 
 1. In [Render Dashboard](https://dashboard.render.com/) apply the Blueprint for this repo so it updates the existing **`9hits-viewer`** service (or open that service and redeploy).
 2. Or, only if `9hits-viewer` does not already exist, create **New → Web Service** → Docker runtime → Free tier and name it exactly `9hits-viewer`.
 3. Paste `ACCESS_KEY` when prompted. `ACCESS_TOKEN` is preconfigured in `render.yaml`.
-4. Set Environment Variables:
+4. Default environment comes from the Blueprint. `NINEHITS_ENABLED=no` (FeelingSurf-only, fits in 512 MB). To enable 9Hits, set:
    ```env
-   ACCESS_KEY=<your-key>
-   SYSTEM_SESSION=yes
-   CLEAR_ALL_SESSIONS=yes
-   SESSION_NOTE=render-system
-   NOTE=render-oregon
-   RESET_INTERVAL=2h
+   NINEHITS_ENABLED=yes
+   FEELINGSURF_ENABLED=no   # prefer this on mid-size plans; both need >= 2 GB RAM
    ```
+   The remaining 9Hits vars (`ACCESS_KEY`, `SYSTEM_SESSION`, `SESSION_NOTE`, `NOTE`, `RESET_INTERVAL`, …) stay inert while `NINEHITS_ENABLED=no`.
 5. *(Optional)* Deploy another free service in a different region (e.g. Frankfurt or Ohio) to get an extra unique IP address.
 
 ---
@@ -163,7 +162,7 @@ The combined repository `Dockerfile` is used on cloud platforms. Configure both 
 | Platform | Deployment | Notes |
 | :--- | :--- | :--- |
 | **Oracle Cloud Always Free** | use `docker compose up -d` | One combined service; the 24 GB tier has ample memory. |
-| **Render** | Blueprint (`render.yaml`) updates the existing **`9hits-viewer`** web service so it runs both viewers. `ACCESS_KEY` is prompted and `ACCESS_TOKEN` is preconfigured. | The free 512 MB plan is unlikely to have enough RAM; use a plan with at least 4 GB. |
+| **Render** | Blueprint (`render.yaml`) updates the single existing **`9hits-viewer`** web service; `ACCESS_TOKEN` is preconfigured. **FeelingSurf-only by default** (`NINEHITS_ENABLED=no`). | The free 512 MB plan cannot run both Chromium viewers (OOM loop); opt in with `NINEHITS_ENABLED=yes` only on a plan with ≥ 2 GB RAM. |
 | **Koyeb** | Deploy this repository Dockerfile and set both secrets. | Uses `koyeb.yaml`; one service runs both viewers. |
 | **Fly.io** | Deploy this repository Dockerfile and set both secrets. | Uses `fly.toml`; one service runs both viewers. |
 | **Railway** | Deploy this repository Dockerfile and set both secrets. | Uses `railway.json`; one service runs both viewers. |
@@ -218,6 +217,8 @@ Viewer config flags are applied by the **init pass** (`nhviewer <flags> --exit-o
 
 | Env var | `nhviewer` flag | Default | Description |
 | :--- | :--- | :--- | :--- |
+| `NINEHITS_ENABLED` | — | `no` | `yes`/`no`/`1`/`0`/`true`/`false`/`on`/`off` — run the 9Hits viewer. **Off by default** because two Chromium viewers OOM 512 MB free instances; set `yes` on hosts with ≥ 2 GB RAM (or pair with `FEELINGSURF_ENABLED=no`) |
+| `FEELINGSURF_ENABLED` | — | `yes` | `yes`/`no`/`1`/`0`/`true`/`false`/`on`/`off` — run the FeelingSurf viewer (auto-disables quietly when the binary is absent, e.g. the HF Gradio runtime) |
 | `ACCESS_KEY` | `--access-key` | *required* | From [panel.9hits.com/user/profile](https://panel.9hits.com/user/profile) |
 | `SYSTEM_SESSION` | `--system-session` | `no` | `yes`/`no` — runs direct session on instance IP |
 | `CLEAR_ALL_SESSIONS` | `--clear-all-sessions` | `yes` | Wipes stale sessions on boot |
@@ -261,8 +262,9 @@ GET https://<your-service>/health
 ```json
 {
   "service": "hits4me-combined-viewer",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "status": "ok",
+  "viewer_enabled": true,
   "viewer_running": true,
   "supervisor_running": true,
   "viewer_pid": 42,
@@ -283,6 +285,7 @@ Point any free uptime monitor (**UptimeRobot, Better Stack, Cron-job.org, Kuma**
 
 ## Troubleshooting
 
+* **Render: `Ran out of memory (used over 512MB)` → "Service recovered" → repeat (~1/min)** — the 9Hits v6 + FeelingSurf pair (two Chromium viewers) exceeds the free 512 MB plan. 9Hits is **off by default** (`NINEHITS_ENABLED=no`), so re-deploying the current Blueprint stops the loop and runs FeelingSurf-only, which fits in 512 MB. If you want 9Hits on Render, set `NINEHITS_ENABLED=yes` and prefer `FEELINGSURF_ENABLED=no`, or upgrade to a plan with ≥ 2 GB RAM (9Hits v6's official recommendation).
 * **`Auth: Duplicate USER on IP [x.x.x.x]`** — Another 9Hits user is already using that public/shared proxy IP. Switch to a system session on a dedicated cloud provider, refresh your Webshare list, or use private proxies.
 * **`Auth: Duplicate SESSION on IP [x.x.x.x]`** — Multiple sessions from your account on the same IP. Ensure `SYSTEM_SESSION=no` when using proxies, or enable `CLEAR_ALL_SESSIONS=yes` to clear lingering connections.
 * **`Pool error: The public pool is closed!`** — Set `EX_PROXY_SESSIONS=0` (or unset it) and use `BULK_ADD_PROXY_LIST` / `BULK_ADD_PROXY_LIST_URL`, or provide your own custom pool via `EX_PROXY_URL`.

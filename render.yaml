@@ -18,10 +18,14 @@ services:
 
       - key: PORT
         value: "10000"
-      # NOTE: 9Hits v6 (post Aug-2026, current Chromium) recommends >= 2 GB RAM.
-      # On the 512 MB free plan both viewers together may OOM-crash. If that
-      # happens, set FEELINGSURF_ENABLED=no here and run FeelingSurf as its
-      # own separate free web service.
+      # 9Hits is OFF by default: two Chromium viewers (9Hits v6 + FeelingSurf)
+      # together OOM the 512 MB free plan ("Ran out of memory (used over 512MB)"
+      # every ~1 min). With NINEHITS_ENABLED=no (default) this service runs
+      # FeelingSurf-only + /health and fits in 512 MB. To enable 9Hits, set
+      # NINEHITS_ENABLED=yes AND prefer FEELINGSURF_ENABLED=no, or upgrade to
+      # a plan with >= 2 GB RAM.
+      - key: NINEHITS_ENABLED
+        value: "no"
       - key: FEELINGSURF_ENABLED
         value: "yes"
       - key: CLEAR_ALL_SESSIONS
