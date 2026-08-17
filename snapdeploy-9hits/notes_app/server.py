@@ -18,7 +18,7 @@ Endpoints
 
 Environment
 -----------
-    PORT                HTTP port for this server     (default 3000)
+    PORT                HTTP port for this server     (default 8000)
     NOTES_DATA          JSON file used for persistence (default ~/.notesly/notes.json)
 
 Stdlib only — no third-party dependencies.
@@ -37,7 +37,7 @@ from urllib.parse import urlparse, unquote
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(ROOT, "static")
 
-PORT = int(os.environ.get("PORT", "3000") or 3000)
+PORT = int(os.environ.get("PORT", "8000") or 8000)
 NOTES_DATA = os.path.expanduser(os.environ.get("NOTES_DATA", "~/.notesly/notes.json"))
 MAX_BODY = 512 * 1024  # 512 KB request body cap
 STARTED_AT = time.time()

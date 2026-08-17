@@ -4,7 +4,7 @@ This folder is a standalone deployment for
 [SnapDeploy](https://snapdeploy.dev/). It does not touch any of the files in
 the repository root.
 
-* The public URL (container port `3000`) serves **Notesly**, a complete,
+* The public URL (container port `8000`) serves **Notesly**, a complete,
   working notes app — landing page, feature sections and a real notes editor
   (create / pin / search / tag / auto-save), with notes persisted server-side
   in a JSON file and mirrored in the browser.
@@ -49,7 +49,7 @@ Use these SnapDeploy settings:
 | Dockerfile | `Dockerfile` (relative to the root directory) |
 | Architecture | `linux/amd64` / x86_64 |
 | Start command | **Leave empty** |
-| Container port | `3000` |
+| Container port | `8000` |
 | Health-check path | `/health` (or `/`) |
 
 1. In SnapDeploy, create a container from this GitHub repository.
@@ -67,7 +67,7 @@ Use these SnapDeploy settings:
    /notesly-start.sh
    ```
 
-5. Set the container/internal port to **`3000`** and the health path to
+5. Set the container/internal port to **`8000`** and the health path to
    **`/health`** (or `/`), then deploy.
 
 The access key is embedded in the image configuration, so no token variable is
@@ -145,8 +145,8 @@ ACCESS_KEY=another_key docker compose up --build
 In another terminal:
 
 ```bash
-curl http://localhost:3000/          # notes website
-curl http://localhost:3000/health    # status
+curl http://localhost:8000/          # notes website
+curl http://localhost:8000/health    # status
 ```
 
 Stop and remove the test container with `docker compose down`.
@@ -156,7 +156,7 @@ Stop and remove the test container with `docker compose down`.
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `ACCESS_KEY` | No | Embedded key | Worker access key; overrides the image default |
-| `PORT` | No | `3000` | Notes website / container port |
+| `PORT` | No | `8000` | Notes website / container port |
 | `SUPERVISOR_DELAY` | No | `10` | Seconds the supervisor waits before relaunching a crashed worker |
 | `SYSTEM_SESSION` | No | `yes` | Run a direct session on the container IP |
 | `CLEAR_ALL_SESSIONS` | No | `yes` | Clear stale sessions on boot |
