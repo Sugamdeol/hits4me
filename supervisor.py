@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-supervisor.py - 24x7 process manager for the combined 9Hits + FeelingSurf
-container.
+supervisor.py - 24x7 process manager for the 9Hits viewer container.
 
 This is a tiny, stdlib-only init/supervisor. It is designed for
 **continuous operation**: the supervisor is the only long-lived process in
@@ -11,15 +10,16 @@ independently for as long as the container itself is running.
 Design principles
 =================
 
-* **No "sleep & pray" / no Gradio activity / no HTTP keep-alive.** The
+* **No "sleep & pray" / no HTTP keep-alive.** The
   supervisor runs a tight loop, owns every child as a direct subprocess
   child, reaps dead children immediately, and restarts them on their own
   schedule. It does not depend on a web request or any user interaction
   to keep the viewers running.
 
-* **Each viewer is an independent slot.** A crash in 9Hits does NOT
-  touch FeelingSurf and vice versa. Each slot has its own PID, log file,
-  restart counter, exponential backoff, and optional memory cap.
+* **Each service is an independent slot.** A crash in 9Hits does NOT
+  touch the /health server and vice versa. Each slot has its own PID,
+  log file, restart counter, exponential backoff, and optional memory
+  cap.
 
 * **The supervisor is the parent of every child.** Children are spawned
   in their own session (os.setsid) so a SIGTERM to the supervisor
@@ -41,17 +41,16 @@ Design principles
   exceeds ``SLOT_LOG_MAX_BYTES`` (default 10 MB), keeping
   ``SLOT_LOG_BACKUPS`` backup files. /logs/9hits.log.1 etc. are the
   previous copies. A 10 MB cap with 2 backups = 30 MB worst case per
-  slot = 150 MB for five slots - well under a free-tier disk.
+  slot - well under a free-tier disk.
 
-* **Per-slot memory cap.** Optional ``NH_MAX_MEMORY_MB`` /
-  ``FS_MAX_MEMORY_MB`` (also accepted: ``NINEHITS_MAX_MEMORY_MB`` /
-  ``FEELINGSURF_MAX_MEMORY_MB``) make the supervisor gracefully
+* **Per-slot memory cap.** Optional ``NH_MAX_MEMORY_MB`` (also
+  accepted: ``NINEHITS_MAX_MEMORY_MB``) makes the supervisor gracefully
   restart ONLY the offending slot when its process tree's RSS exceeds
-  the cap. The per-slot cap catches a single runaway viewer before the
-  total RSS trips the cgroup OOM.
+  the cap. The per-slot cap catches a runaway viewer before the total
+  RSS trips the cgroup OOM.
 
-* **Per-slot health-check interval.** ``NINEHITS_CHECK_INTERVAL`` /
-  ``FEELINGSURF_CHECK_INTERVAL`` (default 30 s) set the cadence at
+* **Per-slot health-check interval.** ``NINEHITS_CHECK_INTERVAL``
+  (default 30 s) sets the cadence at
   which the supervisor's expensive per-slot checks (memory, process
   count) run for each slot. The main loop still ticks at 500 ms for
   fast signal/crash response.
@@ -60,9 +59,7 @@ Design principles
   the supervisor. It then propagates SIGTERM to every child, waits
   their ``stop_grace``, then SIGKILLs anything still alive. No orphans.
 
-* **No external dependencies.** Pure Python 3.7+ stdlib. The
-  ``requirements.txt`` file (used only by the HF Gradio runtime) is
-  untouched.
+* **No external dependencies.** Pure Python 3.7+ stdlib.
 
 Environment variables (new in this revision)
 ============================================
@@ -70,7 +67,6 @@ Environment variables (new in this revision)
 Slot visibility / cadence
   NINEHITS_CHECK_INTERVAL         seconds between expensive 9Hits checks
                                    (memory, proc count). Default 30.
-  FEELINGSURF_CHECK_INTERVAL      same for FeelingSurf. Default 30.
   SUPERVISOR_TICK                 main loop tick in seconds. Default 0.5.
                                    Lower = faster signal/crash response,
                                    slightly higher steady-state CPU.
@@ -87,15 +83,11 @@ Memory protection
                                   when 9Hits process tree RSS exceeds
                                    this, the supervisor gracefully
                                    restarts ONLY 9Hits. Default 0 = off.
-  FEELINGSURF_MAX_MEMORY_MB / FS_MAX_MEMORY_MB
-                                  same for FeelingSurf. Default 0 = off.
   NINEHITS_MAX_CHILDREN / NH_MAX_CHILDREN
                                   refuse to start a 9Hits slot whose
                                    process tree would exceed N
                                    children (fork-bomb guard).
                                    Default 0 = off.
-  FEELINGSURF_MAX_CHILDREN / FS_MAX_CHILDREN
-                                  same for FeelingSurf. Default 0 = off.
 
 Log rotation
   SLOT_LOG_MAX_BYTES              rotate per-slot log at this size.
@@ -105,10 +97,10 @@ Log rotation
 
 Paths (all already supported)
   LOG_DIR, HEALTH_SERVER_PATH, NINEHITS_LAUNCHER_PATH,
-  FEELINGSURF_LAUNCHER_PATH, SUPERVISOR_DISABLED
+  SUPERVISOR_DISABLED
 
-All other env vars (DUAL_VIEWER_MODE, LOW_MEMORY, etc.) are honoured by
-the existing start.sh layer; the supervisor does not consume them.
+All other env vars (LOW_MEMORY, etc.) are honoured by the existing
+start.sh layer; the supervisor does not consume them.
 """
 
 import errno
@@ -138,9 +130,6 @@ SUPERVISOR_VERSION = "2.0.0"
 # these.
 HEALTH_SERVER_PATH = os.environ.get("HEALTH_SERVER_PATH", "/health_server.py")
 NINEHITS_LAUNCHER_PATH = os.environ.get("NINEHITS_LAUNCHER_PATH", "/start.sh")
-FEELINGSURF_LAUNCHER_PATH = os.environ.get(
-    "FEELINGSURF_LAUNCHER_PATH", "/feelingsurf-run.sh"
-)
 
 # Restart / backoff policy. Concrete numbers are read from the
 # environment below, after the helper functions are defined.
@@ -167,26 +156,17 @@ def _env_pos_int(name: str, default: int) -> int:
         return default
 
 
-# Per-slot health check intervals.
+# Per-slot health check interval.
 NINEHITS_CHECK_INTERVAL = _env_pos_int("NINEHITS_CHECK_INTERVAL", 30)
-FEELINGSURF_CHECK_INTERVAL = _env_pos_int("FEELINGSURF_CHECK_INTERVAL", 30)
 
-# Per-slot memory cap. 0 = disabled. Two names are accepted: a
-# viewer-specific one (NH_MAX_MEMORY_MB / FS_MAX_MEMORY_MB) and a
-# common one (NINEHITS_MAX_MEMORY_MB / FEELINGSURF_MAX_MEMORY_MB).
-# The viewer-specific one wins when both are set.
+# Per-slot memory cap. 0 = disabled. Two names are accepted:
+# NINEHITS_MAX_MEMORY_MB and the shorter NH_MAX_MEMORY_MB.
 NINEHITS_MAX_MEMORY_MB = _env_pos_int("NINEHITS_MAX_MEMORY_MB", 0) or _env_pos_int(
     "NH_MAX_MEMORY_MB", 0
-)
-FEELINGSURF_MAX_MEMORY_MB = _env_pos_int("FEELINGSURF_MAX_MEMORY_MB", 0) or _env_pos_int(
-    "FS_MAX_MEMORY_MB", 0
 )
 # Per-slot child-process count cap. 0 = disabled.
 NINEHITS_MAX_CHILDREN = _env_pos_int("NINEHITS_MAX_CHILDREN", 0) or _env_pos_int(
     "NH_MAX_CHILDREN", 0
-)
-FEELINGSURF_MAX_CHILDREN = _env_pos_int("FEELINGSURF_MAX_CHILDREN", 0) or _env_pos_int(
-    "FS_MAX_CHILDREN", 0
 )
 
 # Log rotation.
@@ -226,9 +206,9 @@ def _load_config_from_env() -> None:
     threading them through every constructor."""
     global DEFAULT_RESTART_DELAY, MAX_RESTART_DELAY
     global PARK_AFTER_CRASHES, PARK_SECS, TICK_SECONDS
-    global NINEHITS_CHECK_INTERVAL, FEELINGSURF_CHECK_INTERVAL
-    global NINEHITS_MAX_MEMORY_MB, FEELINGSURF_MAX_MEMORY_MB
-    global NINEHITS_MAX_CHILDREN, FEELINGSURF_MAX_CHILDREN
+    global NINEHITS_CHECK_INTERVAL
+    global NINEHITS_MAX_MEMORY_MB
+    global NINEHITS_MAX_CHILDREN
     global SLOT_LOG_MAX_BYTES, SLOT_LOG_BACKUPS
     DEFAULT_RESTART_DELAY = float(
         str(os.environ.get("SUPERVISOR_DELAY", "10") or "10").strip() or "10"
@@ -245,21 +225,11 @@ def _load_config_from_env() -> None:
         str(os.environ.get("SUPERVISOR_TICK", "0.5") or "0.5").strip() or "0.5"
     )
     NINEHITS_CHECK_INTERVAL = _env_pos_int("NINEHITS_CHECK_INTERVAL", 30)
-    FEELINGSURF_CHECK_INTERVAL = _env_pos_int("FEELINGSURF_CHECK_INTERVAL", 30)
-    # The viewer-specific (NH/FS_MAX_MEMORY_MB) takes precedence over
-    # the common (NINEHITS/FEELINGSURF_MAX_MEMORY_MB) so existing
-    # configs keep working.
     NINEHITS_MAX_MEMORY_MB = _env_pos_int("NINEHITS_MAX_MEMORY_MB", 0) or _env_pos_int(
         "NH_MAX_MEMORY_MB", 0
     )
-    FEELINGSURF_MAX_MEMORY_MB = _env_pos_int("FEELINGSURF_MAX_MEMORY_MB", 0) or _env_pos_int(
-        "FS_MAX_MEMORY_MB", 0
-    )
     NINEHITS_MAX_CHILDREN = _env_pos_int("NINEHITS_MAX_CHILDREN", 0) or _env_pos_int(
         "NH_MAX_CHILDREN", 0
-    )
-    FEELINGSURF_MAX_CHILDREN = _env_pos_int("FEELINGSURF_MAX_CHILDREN", 0) or _env_pos_int(
-        "FS_MAX_CHILDREN", 0
     )
     SLOT_LOG_MAX_BYTES = _env_pos_int("SLOT_LOG_MAX_BYTES", 10 * 1024 * 1024)
     SLOT_LOG_BACKUPS = max(0, _env_pos_int("SLOT_LOG_BACKUPS", 2))
@@ -1209,10 +1179,8 @@ class Supervisor:
 
 # Binaries the external-instance guard recognises. The 9Hits viewer is
 # a Chromium-based binary whose process tree includes "may" (the
-# upstream engine) and "nhviewer" (the launcher); FeelingSurf is an
-# Electron binary.
+# upstream engine) and "nhviewer" (the launcher).
 _NH_EXE_BASENAMES = ("may", "nhviewer", "chrome", "electron")
-_FS_EXE_BASENAMES = ("FeelingSurfViewer", "chrome", "electron")
 
 
 def _build_slots() -> List[ManagedSlot]:
@@ -1222,13 +1190,10 @@ def _build_slots() -> List[ManagedSlot]:
     behaviour is preserved. 9Hits still goes through /start.sh because
     that script does the Xvfb setup, the init pass and the wedge watchdog.
     """
-    nh_enabled = _env_bool("NINEHITS_ENABLED", False)
-    fs_enabled = _env_bool("FEELINGSURF_ENABLED", True)
+    nh_enabled = _env_bool("NINEHITS_ENABLED", True)
 
     nh_cpu = _env_int("NH_CPU_SHARES", 0) or None
     nh_mem = _env_int("NH_MEM_LIMIT_MB", 0) or None
-    fs_cpu = _env_int("FS_CPU_SHARES", 0) or None
-    fs_mem = _env_int("FS_MEM_LIMIT_MB", 0) or None
 
     slots: List[ManagedSlot] = []
 
@@ -1262,36 +1227,6 @@ def _build_slots() -> List[ManagedSlot]:
             description="9Hits Viewer v6 (disabled by NINEHITS_ENABLED)",
         ))
 
-    # --- feelingsurf ------------------------------------------------------
-    if fs_enabled:
-        slots.append(ManagedSlot(
-            name="feelingsurf",
-            command=[FEELINGSURF_LAUNCHER_PATH],
-            enabled=True,
-            log_file=os.path.join(LOG_DIR, "feelingsurf.log"),
-            env={"SUPERVISOR_MANAGED": "1"},
-            stop_grace=15.0,
-            cpu_shares=fs_cpu,
-            mem_limit_mb=fs_mem,
-            check_interval=FEELINGSURF_CHECK_INTERVAL,
-            max_memory_mb=FEELINGSURF_MAX_MEMORY_MB,
-            max_children=FEELINGSURF_MAX_CHILDREN,
-            description=(
-                "FeelingSurf Viewer (X11 viewer on its own Xvfb, or shared :99)"
-            ),
-            exe_guard_basenames=_FS_EXE_BASENAMES,
-        ))
-    else:
-        slots.append(ManagedSlot(
-            name="feelingsurf",
-            command=["/bin/true"],
-            enabled=False,
-            log_file=os.path.join(LOG_DIR, "feelingsurf.log"),
-            stop_grace=1.0,
-            check_interval=FEELINGSURF_CHECK_INTERVAL,
-            description="FeelingSurf Viewer (disabled by FEELINGSURF_ENABLED)",
-        ))
-
     # --- health server ----------------------------------------------------
     slots.append(ManagedSlot(
         name="health",
@@ -1301,7 +1236,7 @@ def _build_slots() -> List[ManagedSlot]:
         env={"SUPERVISOR_MANAGED": "1", "SUPERVISOR_VERSION": SUPERVISOR_VERSION},
         stop_grace=5.0,
         check_interval=5,
-        description="Combined /health + dashboard HTTP server (port $PORT)",
+        description="/health + dashboard HTTP server (port $PORT)",
     ))
 
     return slots
@@ -1310,27 +1245,6 @@ def _build_slots() -> List[ManagedSlot]:
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
-
-
-def _start_keepalive_thread() -> None:
-    """Start the FeelingSurf keep-alive pinger in a background daemon thread.
-
-    This runs inside the 9Hits deployment so the existing service doubles as a
-    lightweight keep-alive client for the *separate* FeelingSurf deployment
-    (see keepalive.py). It is a daemon thread: it can never block, crash, or
-    restart the main supervisor, and it only runs when ``FEELINGSURF_URL`` is
-    configured. Any failure is caught and logged by keepalive.py - a
-    temporarily unreachable FeelingSurf service is ignored here.
-    """
-    try:
-        import keepalive  # local import so its absence can never break startup
-    except Exception as exc:  # pragma: no cover - defensive only
-        _self_log("[KeepAlive] could not load keepalive module: %s" % exc)
-        return
-    try:
-        keepalive.start_keepalive_thread()
-    except Exception as exc:  # pragma: no cover - defensive only
-        _self_log("[KeepAlive] could not start pinger: %s" % exc)
 
 
 def main() -> int:
@@ -1366,10 +1280,6 @@ def main() -> int:
         "starting (version=%s, log_dir=%s, slots=%s, tick=%.1fs)"
         % (SUPERVISOR_VERSION, LOG_DIR, ",".join(sup.slots.keys()), TICK_SECONDS)
     )
-    # Start the FeelingSurf keep-alive pinger (daemon thread, only when
-    # FEELINGSURF_URL is set). The supervisor and the 9Hits viewers start and
-    # run normally regardless of whether the FeelingSurf URL is reachable.
-    _start_keepalive_thread()
     return sup.run()
 
 
