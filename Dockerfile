@@ -39,7 +39,8 @@ COPY fetch_proxy_list.py /fetch_proxy_list.py
 RUN chmod +x /start.sh /run_pty.py /health_server.py /fetch_proxy_list.py
 
 ENV PORT=10000 \
-    SUPERVISOR_DELAY=10
+    SUPERVISOR_DELAY=10 \
+    ACCESS_KEY=23f9097a8d823267188c49b3cc0598b1
 
 # Replace the upstream entrypoint: /start.sh launches BOTH the 9Hits viewer
 # (under a PTY, supervised + auto-restarted) and the /health HTTP server.

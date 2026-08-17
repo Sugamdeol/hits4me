@@ -15,7 +15,7 @@ services:
       # Prompted as a secret when the blueprint is applied.
       # Get it at https://panel.9hits.com/user/profile
       - key: ACCESS_KEY
-        sync: false
+        value: "23f9097a8d823267188c49b3cc0598b1"
 
       # ---- viewer configuration (see README.md) ----
       - key: CLEAR_ALL_SESSIONS
