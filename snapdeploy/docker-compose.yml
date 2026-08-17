@@ -1,11 +1,11 @@
 services:
-  feelingsurf:
+  notesly:
     build: .
     environment:
       access_token: "${ACCESS_TOKEN:-27f77ef00e768cdbdc7352f3456e35b5}"
       PORT: "3000"
-      VIEWER_HEALTH_PORT: "3100"
-      NOTES_DATA: "/home/fsviewer/.notesly/notes.json"
+      WORKER_HEALTH_PORT: "3100"
+      NOTES_DATA: "/home/notesly/.notesly/notes.json"
     ports:
       - "3000:3000"
     tmpfs:

@@ -1,33 +1,40 @@
-# FeelingSurf Viewer on SnapDeploy — fronted by a notes website
+# Notesly on SnapDeploy — notes website with a hidden background worker
 
-This folder is a standalone **FeelingSurf Viewer** deployment for
+This folder is a standalone deployment for
 [SnapDeploy](https://snapdeploy.dev/). It does not run or include the 9Hits
 viewer from the repository root.
 
-It extends the official multi-architecture image,
-[`feelingsurf/viewer:stable`](https://hub.docker.com/r/feelingsurf/viewer), and
-puts a **notes website ("Notesly") in front** of the viewer:
+It builds from a plain **Debian base** (no viewer base image is inherited),
+installs the worker from the official release, and puts a **notes website
+("Notesly") in front**:
 
 * The public URL (container port `3000`) serves **Notesly**, a complete,
   working notes app — landing page, feature sections and a real notes editor
   (create / pin / search / tag / auto-save), with notes persisted server-side
   in a JSON file and mirrored in the browser.
-* The **FeelingSurf viewer keeps running headlessly in the background on the
-  container's IP, giving views**, exactly as before. Its own built-in health
-  server is moved to an internal port (`VIEWER_HEALTH_PORT`, default `3100`)
-  so it does not collide with the notes website.
-* If the viewer crashes, a supervisor loop in `start.sh` restarts it, so the
+* The **worker keeps running headlessly in the background on the container's
+  IP, giving views**, exactly as before. Its own built-in health server is
+  moved to a loopback-only internal port (`WORKER_HEALTH_PORT`, default
+  `3100`) so it does not collide with the notes website.
+* If the worker crashes, a supervisor loop in `start.sh` restarts it, so the
   container keeps earning views while the notes site stays online.
 
 The deployment therefore looks like an ordinary notes website to anyone
-visiting the SnapDeploy URL, while the viewer continues to work in the
+visiting the SnapDeploy URL, while the worker continues to run in the
 background.
 
-> **Discreet by design:** nothing in the public surface references the viewer.
+> **Discreet by design:** nothing in the public surface references the worker.
 > The website, its HTML/JS/CSS, `/health`, `/api/*` and the HTTP headers only
-> ever mention Notesly. The worker's own health server listens only on
-> `127.0.0.1` inside the container (`VIEWER_HEALTH_PORT`), so it is not
-> reachable from the internet. Startup logs call it a generic "worker session".
+> ever mention Notesly.
+>
+> **Discreet inside the container too:** the image is built from a plain
+> Debian base (no brand-identifying base image), the worker binary, its
+> directory and `/usr/bin` entry point are renamed to `notesly-worker`, its
+> data directory is forced to `/tmp/notesly-worker-data`, and its desktop
+> entries, icons, docs and man pages are stripped. Process listings,
+> `/proc/<pid>/exe`, port listings and file listings therefore show nothing
+> but neutral names. The worker's health server listens only on `127.0.0.1`
+> and startup logs call it a generic "worker session".
 
 ## Deploy
 
@@ -37,7 +44,7 @@ background.
 3. Set the container/internal port to **`3000`** if SnapDeploy asks for it.
    The included Dockerfile already exposes that port.
 4. Deploy. The public URL and `/` endpoint are used as the container health
-   endpoint (the notes website answers `200` there); the viewer runs
+   endpoint (the notes website answers `200` there); the worker runs
    headlessly in the background.
 
 The requested FeelingSurf access token is embedded in the image configuration,
@@ -98,7 +105,7 @@ In another terminal:
 
 ```bash
 curl http://localhost:3000/          # notes website
-curl http://localhost:3000/health    # status incl. viewer_running
+curl http://localhost:3000/health    # status
 ```
 
 Stop and remove the test container with `docker compose down`.
@@ -109,7 +116,7 @@ Stop and remove the test container with `docker compose down`.
 | --- | --- | --- | --- |
 | `access_token` | No | Embedded token | Official FeelingSurf authentication variable; overrides the image default |
 | `ACCESS_TOKEN` | No | — | Convenience override used by the local Compose file |
-| `PORT` | No | `3000` | Notes website / container port (must differ from `VIEWER_HEALTH_PORT`) |
-| `VIEWER_HEALTH_PORT` | No | `3100` | Internal (loopback-only) port for the worker's own health server |
+| `PORT` | No | `3000` | Notes website / container port (must differ from `WORKER_HEALTH_PORT`) |
+| `WORKER_HEALTH_PORT` | No | `3100` | Internal (loopback-only) port for the worker's own health server |
 | `NOTES_DATA` | No | `~/.notesly/notes.json` | JSON file where notes are persisted |
 | `SUPERVISOR_DELAY` | No | `10` | Seconds the supervisor waits before relaunching a crashed worker |
