@@ -1,8 +1,10 @@
-# A single deploy/container running both viewers.
+# The 9Hits deployment. Runs ONLY the 9Hits viewer (FeelingSurf now runs in
+# its own separate `feelingsurf` service below). This service also doubles as
+# a lightweight keep-alive client for that separate FeelingSurf deployment.
 #
 #   cp .env.example .env
-#   # Set ACCESS_KEY and ACCESS_TOKEN
-#   docker compose up -d
+#   # Set ACCESS_KEY (9Hits). FeelingSurf token lives on the feelingsurf service.
+#   docker compose up -d viewers
 #   curl http://localhost:10000/health
 services:
   viewers:
@@ -10,29 +12,23 @@ services:
     shm_size: 2g
     ports:
       - "10000:10000"
-      # Optional FeelingSurf's internal status UI:
-      - "3000:3000"
     environment:
       PORT: "10000"
-      FEELINGSURF_PORT: "3000"
       NINEHITS_ENABLED: "${NINEHITS_ENABLED:-yes}"
-      FEELINGSURF_ENABLED: "${FEELINGSURF_ENABLED:-yes}"
-      # 512MB dual-viewer management (see README): LOW_MEMORY flags + memguard
-      # memory guardian; auto falls back to time-slicing the two viewers.
-      DUAL_VIEWER_MODE: "${DUAL_VIEWER_MODE:-auto}"
+      # 9Hits-only deployment: FeelingSurf is OFF here (it runs separately).
+      FEELINGSURF_ENABLED: "${FEELINGSURF_ENABLED:-no}"
+      # 9Hits memory tuning (single-viewer box, see README): LOW_MEMORY flags
+      # keep the Chromium small. DUAL_VIEWER_MODE is irrelevant with one viewer.
+      DUAL_VIEWER_MODE: "${DUAL_VIEWER_MODE:-off}"
       TIME_SLICE: "${TIME_SLICE:-1500}"
       LOW_MEMORY: "${LOW_MEMORY:-auto}"
       NH_SP: "${NH_SP:-yes}"
-      FS_SP: "${FS_SP:-yes}"
-      FS_GL_MODE: "${FS_GL_MODE:-swiftshader}"
-      FS_SHARE_DISPLAY: "${FS_SHARE_DISPLAY:-yes}"
       MEMGUARD_LIMIT_MB: "${MEMGUARD_LIMIT_MB:-0}"
       MEMGUARD_HARD_PCT: "${MEMGUARD_HARD_PCT:-97}"
       CREATE_SWAP: "${CREATE_SWAP:-}"
       NH_RUN_EXTRA_ARGS: "${NH_RUN_EXTRA_ARGS:-}"
-      FS_EXTRA_FLAGS: "${FS_EXTRA_FLAGS:-}"
-      ACCESS_TOKEN: "${ACCESS_TOKEN:-}"
-      ACCESS_KEY: "${ACCESS_KEY:-}"
+      # 9Hits access key baked in by default - no manual env needed.
+      ACCESS_KEY: "${ACCESS_KEY:-23f9097a8d823267188c49b3cc0598b1}"
       CLEAR_ALL_SESSIONS: "${CLEAR_ALL_SESSIONS:-yes}"
       SYSTEM_SESSION: "${SYSTEM_SESSION:-no}"
       SESSION_NOTE: "${SESSION_NOTE:-my-proxies}"
@@ -49,15 +45,69 @@ services:
       RESET_INTERVAL: "${RESET_INTERVAL:-2h}"
       NOTE: "${NOTE:-local}"
       SUPERVISOR_DELAY: "${SUPERVISOR_DELAY:-10}"
+      # Keep-alive pinger (see keepalive.py): this 9Hits deployment acts as a
+      # lightweight keep-alive client for the SEPARATE FeelingSurf deployment
+      # below. Defaults to the compose-internal service DNS, so it
+      # automatically reaches the new `feelingsurf` container on any host -
+      # no IP/URL to set manually.
+      FEELINGSURF_URL: "${FEELINGSURF_URL:-http://feelingsurf:10000}"
+      FEELINGSURF_PING_INTERVAL: "${FEELINGSURF_PING_INTERVAL:-300}"
+      FEELINGSURF_PING_TIMEOUT: "${FEELINGSURF_PING_TIMEOUT:-10}"
     tmpfs:
       - /tmp:size=512m,mode=1777
     volumes:
-      # Per-service logs (logs/9hits.log, logs/feelingsurf.log, logs/memguard.log,
-      # logs/health.log, logs/supervisor.log). Bind-mounting /logs onto the
-      # host keeps them across `docker compose up` / image rebuilds and lets
+      # Per-service logs (logs/9hits.log, logs/feelingsurf.log, logs/health.log,
+      # logs/supervisor.log). Bind-mounting /logs onto the host keeps them
+      # across `docker compose up` / image rebuilds and lets
       # the operator inspect each viewer's log without entering the
       # container. A named volume is fine too; the entrypoint creates the
       # directory if it is missing.
+      - ./logs:/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Standalone FeelingSurf deployment - a SEPARATE service/container from the
+  # `viewers` 9Hits deployment above. This one runs ONLY the FeelingSurf
+  # viewer via Dockerfile.feelingsurf (NINEHITS_ENABLED=no).
+  #
+  #   docker compose up -d feelingsurf
+  #   curl http://localhost:10001/health        # FeelingSurf /health endpoint
+  #
+  # Host ports are offset (10001 / 3001) so it can run side by side with the
+  # `viewers` container on the same host. To keep THIS service awake from the
+  # 9Hits deployment, point `viewers` at it:
+  #   FEELINGSURF_URL=http://localhost:10001  # in .env, then restart `viewers`
+  # ---------------------------------------------------------------------------
+  feelingsurf:
+    build:
+      context: .
+      dockerfile: Dockerfile.feelingsurf
+    shm_size: 1g
+    ports:
+      - "10001:10000"
+      - "3001:3000"
+    environment:
+      PORT: "10000"
+      FEELINGSURF_PORT: "3000"
+      NINEHITS_ENABLED: "no"
+      FEELINGSURF_ENABLED: "yes"
+      DUAL_VIEWER_MODE: "off"
+      LOW_MEMORY: "${LOW_MEMORY:-balanced}"
+      FS_GL_MODE: "${FS_GL_MODE:-swiftshader}"
+      FS_SP: "${FS_SP:-no}"
+      FS_EXTRA_FLAGS: "${FS_EXTRA_FLAGS:-}"
+      # FeelingSurf access token baked in by default - no manual env needed.
+      ACCESS_TOKEN: "${ACCESS_TOKEN:-27f77ef00e768cdbdc7352f3456e35b5}"
+      SESSION_NOTE: "${SESSION_NOTE:-my-proxies}"
+      SUPERVISOR_DELAY: "${SUPERVISOR_DELAY:-10}"
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    volumes:
       - ./logs:/logs
     logging:
       driver: json-file

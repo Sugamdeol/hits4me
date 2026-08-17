@@ -18,14 +18,15 @@ Run the **9Hits Viewer v6** ([9hitste/appv6](https://hub.docker.com/r/9hitste/ap
 * **9Hits Viewer** — sophisticated traffic-exchange viewer with proxy/proxy-pool/system-session options.
 * **FeelingSurf Viewer** — drop-in autosurf viewer; one container, one env var (`access_token`), no extra configuration.
 
-**Both viewers run simultaneously by default.** The image's `ENV` defaults
-turn on 9Hits + FeelingSurf at the same time (`DUAL_VIEWER_MODE=concurrent`,
-`LOW_MEMORY=balanced`), with per-viewer memory caps (`NH_MAX_MEMORY_MB=400`,
-`FS_MAX_MEMORY_MB=400`) and a 24x7 process manager (`supervisor.py`) that
-keeps each viewer alive independently. Just set `ACCESS_KEY` (9Hits) and
-`ACCESS_TOKEN` (FeelingSurf) and both viewers will run, restart on crash,
-and stay up indefinitely. To run only one viewer, set the corresponding
-`NINEHITS_ENABLED=no` or `FEELINGSURF_ENABLED=no`.
+**Two independent deployments.** The **9Hits deployment** (this image)
+runs **only the 9Hits viewer** (`FEELINGSURF_ENABLED=no` by default), with a
+24x7 process manager (`supervisor.py`) that keeps it alive and a `supervisor`
+keep-alive pinger (`keepalive.py`) that pings the **separate FeelingSurf
+deployment** every 5 minutes to keep it awake. The **FeelingSurf deployment**
+is a separate service built from `Dockerfile.feelingsurf` that runs only the
+FeelingSurf viewer. Set `ACCESS_KEY` (9Hits) on the 9Hits deployment and
+`ACCESS_TOKEN` (FeelingSurf) on the FeelingSurf deployment. See
+[Standalone FeelingSurf deployment](#2-standalone-feelingsurf-deployment-separate-service--keep-alive).
 
 ---
 
@@ -62,7 +63,7 @@ Each provider assigns an isolated, clean datacenter outbound IP address:
    want to customize the defaults.
 6. The Space will build and launch a live status dashboard while running 9Hits
    and three native FeelingSurf processes. HF mode uses `LOW_MEMORY=off`,
-   `DUAL_VIEWER_MODE=off`, and does not start `memguard.py`.
+   `DUAL_VIEWER_MODE=off`.
 
 ---
 
@@ -83,81 +84,32 @@ Each provider assigns an isolated, clean datacenter outbound IP address:
 ---
 
 ### 3. Render (100% Free Docker Web Service)
-The existing **`9hits-viewer`** web service ([dashboard](https://dashboard.render.com/web/srv-da09a7dbedkc73a829cg)) runs **one** container. Applying this repo's Blueprint updates that same service only — it does **not** create any new Render service (there is exactly one service in `render.yaml`).
+The existing **`9hits-viewer`** web service ([dashboard](https://dashboard.render.com/web/srv-da09a7dbedkc73a829cg)) is the **9Hits deployment**: it runs **only the 9Hits viewer**. `render.yaml` also defines a separate **`feelingsurf`** web service that runs only FeelingSurf (see [Standalone FeelingSurf deployment](#2-standalone-feelingsurf-deployment-separate-service--keep-alive)). Render's free plan allows only ONE web service, so running both services side by side needs a paid plan or another host.
 
-The Blueprint ships with **BOTH viewers enabled** (`NINEHITS_ENABLED=yes`, `FEELINGSURF_ENABLED=yes`) plus the 512 MB survival stack described below, so the old "OOM every ~1 minute" loop is gone. (Previously this service ran FeelingSurf-only because two un-tuned Chromium viewers exceed the free plan's 512 MB.)
+The **`9hits-viewer`** Blueprint ships with **9Hits only** (`NINEHITS_ENABLED=yes`, `FEELINGSURF_ENABLED=no`, `DUAL_VIEWER_MODE=off`) plus the 512 MB memory stack described below, so the old "OOM every ~1 minute" loop (two Chromium viewers on the free plan) is gone.
 
 1. In [Render Dashboard](https://dashboard.render.com/) apply the Blueprint for this repo so it updates the existing **`9hits-viewer`** service (or open that service and redeploy).
 2. Or, only if `9hits-viewer` does not already exist, create **New → Web Service** → Docker runtime → Free tier and name it exactly `9hits-viewer`.
-3. `ACCESS_KEY` and `ACCESS_TOKEN` are **hard-coded in `render.yaml`** — no prompting needed, just deploy.
-4. Default environment comes from the Blueprint: both viewers + `DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=balanced` + `INIT_TIMEOUT=600` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)). After deploy, check `GET /health` → `effective_mode` and `memory_used_mb` to see whether both viewers run concurrently.
+3. `ACCESS_KEY` is **hard-coded in `render.yaml`** — no prompting needed, just deploy. (The FeelingSurf token is hard-coded on the separate `feelingsurf` service.)
+4. Default environment comes from the Blueprint: 9Hits-only + `DUAL_VIEWER_MODE=off` + `LOW_MEMORY=balanced` + `INIT_TIMEOUT=600` + `NH_MAX_MEMORY_MB=400`. It also pings the `feelingsurf` service via `FEELINGSURF_URL` every `FEELINGSURF_PING_INTERVAL` s to keep it awake.
 5. *(Optional)* Deploy another free service in a different region (e.g. Frankfurt or Ohio) to get an extra unique IP address.
 
 ---
 
-## Running both viewers on 512 MB (Render free)
+## Memory on 512 MB plans (Render free)
 
-Two Chromium-based viewers (9Hits v6 CEF + FeelingSurf Electron) each idle at
-roughly 250–400 MB — together they blow past Render's 512 MB hard cgroup limit,
-which is what caused the classic `Ran out of memory (used over 512MB)` →
-"Service recovered" → repeat loop. This repo now keeps the pair inside the
-budget with **three cooperating layers** (all stdlib/builtin, no extra deps):
+The default deployment runs **9Hits only** — a single Chromium-based viewer
+(9Hits v6 CEF) idles at roughly 250–400 MB, which fits comfortably inside
+Render's 512 MB free cgroup limit. `LOW_MEMORY` shrinks the 9Hits Chromium to
+keep it well under the budget: `--renderer-process-limit=1`, `--disable-gpu`,
+V8 heap caps, disk/media caches off, and `Xvfb` resolution trimmed. The
+`supervisor.py` per-slot memory cap (`NH_MAX_MEMORY_MB`, default 400) restarts
+only 9Hits if it runs away.
 
-**Layer 1 — shrink both viewers (`LOW_MEMORY`, default `auto`).**
-On boxes with < 1 GB of detected memory the entrypoint adds Chromium/Electron
-switches to both viewers: `--renderer-process-limit=1` (one renderer for all
-sessions instead of one per session), `--enable-low-end-device-mode` +
-`--memory-model=low` (Chromium's own low-RAM behaviour), V8 heap caps
-(`--js-flags=--max-old-space-size=64`), disk/media caches off, background
-sync/extensions/network off, and — for 9Hits only — `--disable-gpu` to drop the
-separate GPU process (~40–80 MB). FeelingSurf keeps upstream's swiftshader GL
-flags (upstream removed `--disable-gpu` because it crashes 2.5.2). Xvfb
-resolutions also shrink to 1280x720, and `MALLOC_TRIM_THRESHOLD_`/`MMAP`
-tunables make glibc give freed heap pages back to the kernel.
-**`LOW_MEMORY=balanced` is the image default** and is the safe setting for
-Render's 512 MB free plan: it applies every flag above without touching
-Chromium's process model.
-**`LOW_MEMORY=extreme`** takes it further: both viewers run with
-`--single-process --in-process-gpu` — measured **~324 MB for the pair**, but
-Chromium labels `--single-process` unsupported and on Render 512 MB the 9Hits
-run pass dies within seconds with **exit code 133 (SIGTRAP)**, producing a
-crash loop. Use `extreme` only on hosts with ≥ 2 GB. If it is enabled anyway,
-`start.sh`'s **fast-crash detector** notices a run pass that exits in under
-10 s with a non-clean code and drops `--single-process` on the very next
-launch (seconds), instead of waiting for the old 3-cycle auto-fallback
-(~20+ min, since every cycle includes a full init pass).
-
-**Layer 2 — memory guardian (`memguard.py`, always on unless `off`).**
-Every few seconds it sums container RSS from `/proc` against the real limit
-(`MEMGUARD_LIMIT_MB`, auto-detected from the cgroup, set to `512` in
-`render.yaml`). If total RSS crosses `MEMGUARD_HARD_PCT` (default 97% on small
-boxes), it **gracefully restarts the heaviest viewer** (TERM → KILL after 15 s;
-the viewer's own supervisor in `start.sh` brings it back) *before* the platform
-can OOM-kill the whole container. A cooldown prevents kill-thrash. With
-`DUAL_VIEWER_MODE=concurrent` and `LOW_MEMORY=balanced` the pair fits well
-under the threshold, so the guardian stays mostly silent and both viewers run
-together; the per-viewer caps (`NH_MAX_MEMORY_MB` / `FS_MAX_MEMORY_MB`, 400 MB
-each on Render) restart only the viewer that misbehaves.
-
-**Layer 3 — time-slice fallback (`DUAL_VIEWER_MODE`, default `concurrent`).**
-The image's default is `concurrent` (both viewers at the same time).
-If you set `DUAL_VIEWER_MODE=auto` and the box really cannot fit both at once
-(3+ over-budget restarts inside 10 min), memguard auto-switches to
-**time-slice**: the two viewers alternate, `TIME_SLICE` seconds each (default
-1500 = 25 min), so only one Chromium is resident at a time — guaranteed to
-fit 512 MB, at the cost of ~50% uptime per viewer. The supervisors gate their
-launches on a turn file (`/tmp/active_viewer`) and **fail open**: if memguard
-dies, both viewers run freely (no deadlock). With `LOW_MEMORY=balanced` plus
-the 400 MB per-viewer caps the fallback rarely triggers; switch to
-`DUAL_VIEWER_MODE=auto` if your workload (many sessions, heavy pages) does push
-the pair over the budget.
-
-| `DUAL_VIEWER_MODE` | Behaviour |
-| :--- | :--- |
-| `concurrent` (default) | **Always run both at the same time** (pair with `LOW_MEMORY=balanced` + `NH_MAX_MEMORY_MB=400` / `FS_MAX_MEMORY_MB=400`). The guardian is the safety valve only. |
-| `auto` | Run both together; escalate to time-slice only if RAM proves too small. |
-| `time-slice` | Alternate every `TIME_SLICE` seconds. Predictable ~50% uptime each, zero OOM risk. |
-| `off` | Legacy: no guardian, no slicing (two viewers can still OOM 512 MB plans). |
+FeelingSurf is deployed as a **separate service** (`Dockerfile.feelingsurf`),
+so its memory never competes with 9Hits on the same box. Because the two
+viewers no longer share one container, the old dual-viewer memory guardian
+(`memguard.py`), time-slicing, and OOM-thrash handling were **removed**.
 
 ## Dashboard GUI
 
@@ -168,12 +120,12 @@ server, ~0 MB of RAM (a static page that polls `/health` every 2 s):
   marker, plus per-viewer bars (9Hits v6 / FeelingSurf) and the peak.
 * **Dual-viewer card** — configured vs effective mode, the active viewer, and
   a **countdown to the next time-slice flip**.
-* **Viewers card** — running state, phase/pid, silent seconds, restarts for
-  each viewer and the memguard intervention counter.
+* **Viewers card** — running state, phase/pid, silent seconds and restarts
+  for each viewer.
 * **Per-slot controls** — Start / Stop / Restart buttons for the 9Hits
-  slot, the FeelingSurf slot, the memguard slot, and the health server
-  itself (the buttons POST to `/control/<name>/<action>` and the
-  supervisor picks up the request on its next tick).
+  slot, the FeelingSurf slot, and the health server itself (the buttons
+  POST to `/control/<name>/<action>` and the supervisor picks up the
+  request on its next tick).
 * **Log tails** — last 4 KB of `logs/9hits.log` and `logs/feelingsurf.log`
   inlined, so you can see which service produced an error without
   `docker exec`-ing into the container.
@@ -193,7 +145,7 @@ operation.
 
 ### Properties
 
-* **One slot per service** — `ninehits`, `feelingsurf`, `memguard`, `health`.
+* **One slot per service** — `ninehits`, `feelingsurf`, `health`.
   Each is an independent `ManagedSlot` instance in `supervisor.py` and
   each has its own PID, log file, restart counter, and exponential
   backoff state.
@@ -251,12 +203,10 @@ Runtime control (also exposed by the dashboard buttons):
 # Start, stop, or restart a managed slot
 curl -X POST http://localhost:10000/control/ninehits/restart
 curl -X POST http://localhost:10000/control/feelingsurf/stop
-curl -X POST http://localhost:10000/control/memguard/start
 
 # Tail the last 4 KB of any slot's log
 curl http://localhost:10000/logs/9hits
 curl http://localhost:10000/logs/feelingsurf
-curl http://localhost:10000/logs/memguard
 curl http://localhost:10000/logs/supervisor
 
 # Full supervisor snapshot (debug)
@@ -280,7 +230,7 @@ against realistic autosurf-style pages (headless — real deployments add
 Two numbers are given for the pairs: **RSS** (what the raw process list sums
 to — double-counts the file-backed pages the two instances share) and
 **PSS** (proportional set size — the *unique* memory, which is what the cgroup
-actually charges; this is what memguard and the dashboard report):
+actually charges; this is what the supervisor and the dashboard report):
 
 | Scenario | RSS (median, MB) |
 | :--- | ---: |
@@ -299,19 +249,18 @@ actually charges; this is what memguard and the dashboard report):
 (`--single-process --in-process-gpu`) and measures **~324 MB for the whole
 pair** in a lab — but on Render's free 512 MB plan that mode is *not stable*:
 the 9Hits run pass crashes almost immediately with exit code 133 (SIGTRAP).
-The recommended and default configuration on Render is therefore **balanced**,
+The default deployment runs 9Hits only (9Hits easily fits 512 MB). If you
+*opt in* to running both viewers in one container on Render, use **balanced**
 with the per-viewer caps doing the trimming:
 
 ```env
 NINEHITS_ENABLED=yes
-FEELINGSURF_ENABLED=yes
+FEELINGSURF_ENABLED=yes        # opt-in: run both in one container
 DUAL_VIEWER_MODE=concurrent    # both at the same time, no time-slicing
 LOW_MEMORY=balanced
 INIT_TIMEOUT=600
 NH_MAX_MEMORY_MB=400
 FS_MAX_MEMORY_MB=400
-MEMGUARD_LIMIT_MB=512
-MEMGUARD_HARD_PCT=97           # guardian acts at 497 MB - before the OOM
 ```
 
 Safety nets keep `--single-process` from ever bricking a viewer if you do
@@ -324,8 +273,9 @@ enable `extreme` on a bigger host:
   balanced set; `NH_SP=no` / `FS_SP=no` force this manually).
 * **FeelingSurf GL** — upstream runs swiftshader; under single-process, if FS
   crash-loops, set `FS_GL_MODE=disable-gpu` (or `FS_SP=no`).
-* **memguard** still guards at `MEMGUARD_HARD_PCT` of the budget, so a spike
-  restarts the heaviest viewer instead of letting the platform OOM the box.
+* **Per-slot memory cap** — the supervisor restarts 9Hits if its process
+  tree exceeds `NH_MAX_MEMORY_MB`, so a spike is contained instead of letting
+  the platform OOM the box. (The old `memguard.py` guardian was removed.)
 
 The dashboard (`/`) shows both viewers' RSS bars live, so you can confirm they
 are up at the same time.
@@ -338,12 +288,10 @@ Watch it live via `GET /health` (JSON) or open **`/`** in a browser for the dash
   "effective_mode": "time-slice",      // auto escalated - box can't fit both
   "active_viewer": "feelingsurf",      // ninehits is parked until its turn
   "memory_used_mb": 412.5,             // total container RSS right now
-  "memory_limit_mb": 512,              // memguard acts before this is hit
+  "memory_limit_mb": 512,
   "memory_peak_mb": 498.1,
   "ninehits_rss_mb": 0.0,              // parked viewer holds ~0 MB
   "feelingsurf_rss_mb": 331.2,
-  "memguard_interventions": 3,         // times the heaviest viewer was restarted
-  "memguard_last_target": "ninehits",
   "next_flip_in_seconds": 412          // countdown in time-slice mode
 }
 ```
@@ -355,13 +303,13 @@ Notes:
   longer OOM-loops.
 * Uptime bots will see `"status": "restarting"` while the parked viewer is
   down in time-slice mode — that is expected and is not a crash.
-* Want 9Hits alone or FeelingSurf alone on 512 MB? Set
-  `NINEHITS_ENABLED=yes` + `FEELINGSURF_ENABLED=no` (or vice versa) — one
-  viewer easily fits.
+* 9Hits alone is the default (`NINEHITS_ENABLED=yes` +
+  `FEELINGSURF_ENABLED=no`); FeelingSurf runs in its own separate deployment
+  (`Dockerfile.feelingsurf`). Each single viewer easily fits 512 MB.
 * On hosts with ≥ 2 GB (Fly 4 GB, Oracle 24 GB, HF 16 GB) `LOW_MEMORY=auto`
-  disables the flags, memguard never intervenes, and everything runs
-  concurrently as before. `LOW_MEMORY=extreme` (`--single-process`) also
-  requires ≥ 2 GB — it is not safe on Render's 512 MB free plan.
+  disables the flags and everything runs concurrently as before.
+  `LOW_MEMORY=extreme` (`--single-process`) also requires ≥ 2 GB — it is
+  not safe on Render's 512 MB free plan.
 
 ---
 
@@ -370,27 +318,32 @@ Oracle Cloud provides the most generous free tier in the cloud industry (4 ARM v
 ```bash
 git clone https://github.com/Sugamdeol/hits4me.git && cd hits4me
 cp .env.example .env
+# ACCESS_KEY and ACCESS_TOKEN are already baked into .env.example and the
+# Dockerfiles - no manual env editing needed.
 
-# Edit .env and set ACCESS_KEY (9Hits) AND/OR ACCESS_TOKEN (FeelingSurf)
-nano .env
+# Start the 9Hits deployment (9Hits only):
+docker compose up -d viewers
 
-# Start BOTH viewers in one container/deployment:
-docker compose up -d
+# Start the separate FeelingSurf deployment (its own container):
+docker compose up -d feelingsurf
 ```
 
 ---
 
 ### 5. Fly.io
 1. Install `flyctl`: `curl -L https://fly.io/install.sh | sh`
-2. Run `fly launch` in this directory (uses `fly.toml`).
-3. Set both secrets: `fly secrets set ACCESS_KEY="<your-9hits-key>" ACCESS_TOKEN="<your-feelingsurf-token>"`.
+2. Run `fly launch` in this directory (uses `fly.toml`) for the **9Hits deployment**.
+3. `ACCESS_KEY` is already baked into `fly.toml [env]` — no `fly secrets set` needed.
 4. Deploy: `fly deploy`.
 
 ---
 
 ## FeelingSurf Viewer (additional autosurf viewer)
 
-Hit "too many free platforms, no proxies" with 9Hits? This repo runs the **FeelingSurf Viewer** alongside 9Hits in the same container — drop in an `access_token` and the supervisor keeps it alive 24×7. The combined image is the only deployment path; the upstream `feelingsurf/viewer:stable` standalone image is not used here.
+Hit "too many free platforms, no proxies" with 9Hits? This repo deploys the
+**FeelingSurf Viewer** as its **own independent service** (`Dockerfile.feelingsurf`),
+separate from the 9Hits deployment. Drop in an `access_token` and the
+supervisor keeps FeelingSurf alive 24×7.
 
 ⚠️ **Disclaimer:** *Never share your FeelingSurf `access_token` — it grants full access to your account.*
 
@@ -398,39 +351,121 @@ Hit "too many free platforms, no proxies" with 9Hits? This repo runs the **Feeli
 1. Register at [feelingsurf.fr](https://www.feelingsurf.fr/) and finish email confirmation.
 2. Go to **Member area → Profile / Settings → API / Access Token** and generate one. (The token is a long opaque string — treat it like a password.)
 
-### 1. `docker compose` (combined 9Hits + FeelingSurf in one container)
-The repository Dockerfile installs FeelingSurf alongside 9Hits. One Compose service and one deploy run both viewers at the same time:
+### 1. `docker compose` — the 9Hits deployment
+The repository Dockerfile (`Dockerfile`) builds the **9Hits deployment**. It
+runs **only the 9Hits viewer** (`FEELINGSURF_ENABLED=no` by default), with a
+supervised `/health` server and the keep-alive pinger.
 
 ```bash
 cp .env.example .env
-# Fill in ACCESS_KEY (9Hits) AND/OR ACCESS_TOKEN (FeelingSurf), e.g.:
-#   ACCESS_KEY=...
-#   ACCESS_TOKEN=...
-
-docker compose up -d                                # both viewers, one container
-curl http://localhost:10000/health                  # combined status
-# Set FEELINGSURF_ENABLED=no only when you intentionally want 9Hits alone.
+# ACCESS_KEY is already baked into .env.example / the Dockerfile - no manual
+# env editing needed.
+docker compose up -d viewers
+curl http://localhost:10000/health                  # 9Hits status
 ```
 
 Service map:
 | Container | Processes | Health |
 | :--- | :--- | :--- |
-| `viewers` | supervised 9Hits + supervised FeelingSurf | combined `GET /health` on port `10000`; FeelingSurf also listens internally on `3000` |
+| `viewers` | supervised 9Hits | `GET /health` on port `10000` |
 
-The platform deploys one image once. Both viewers share the container network and `/dev/shm`, while independent supervisors restart either process if it exits. Budget at least **4 GB RAM and 2 CPUs** for reliable operation; small free instances may run out of memory.
+### 2. Standalone FeelingSurf deployment (separate service) + keep-alive
+
+The **9Hits deployment** runs 9Hits only. To run FeelingSurf on its **own
+independent service/container**, this repo ships a dedicated
+`Dockerfile.feelingsurf` that builds a container running **only the
+FeelingSurf viewer** plus its `/health` endpoint.
+
+```bash
+# Standalone FeelingSurf service via docker compose:
+docker compose up -d feelingsurf
+curl http://localhost:10001/health          # FeelingSurf /health endpoint
+```
+
+Service map:
+| Container | Processes | Health |
+| :--- | :--- | :--- |
+| `viewers` (9Hits deployment) | supervised 9Hits only | `GET /health` on port `10000` |
+| `feelingsurf` (separate) | supervised FeelingSurf only | `GET /health` on port `10001` (host) / `10000` (container) |
+
+> The `feelingsurf` service is independent: its own name, container,
+> environment and ports (offset to `10001`/`3001` so it can run on the same
+> host as the `viewers` container). Render users: the free plan allows only
+> ONE web service, so running two services side by side needs a paid plan or
+> another host.
+
+#### Keep the FeelingSurf deployment awake
+
+The **9Hits deployment** doubles as a lightweight keep-alive client for the
+separate FeelingSurf deployment. Every `FEELINGSURF_PING_INTERVAL` seconds
+(default `300` = 5 min) `supervisor.py` fires a tiny HTTP GET at the FeelingSurf
+deployment from a **background daemon thread** (`keepalive.py`). It pings
+`<URL>/health` first and falls back to `<URL>/` if that returns 404.
+
+The target URL is **resolved automatically** — no manual URL to set:
+
+| Resolution order | Source | When it applies |
+| :--- | :--- | :--- |
+| 1 | `FEELINGSURF_URL` | explicit override (hosted deployments, e.g. Render) |
+| 2 | `FEELINGSURF_INTERNAL_URL` | in-cluster/internal DNS when the two share a network |
+| 3 | Platform auto-detection | Render / Fly when this service *is* the FeelingSurf deployment |
+
+On **docker-compose** the two services share a network, so the pinger
+defaults to the internal service DNS and finds the new `feelingsurf` container
+automatically on any host — you never set an IP or URL:
+
+```env
+# docker-compose auto-targets the feelingsurf service - no URL needed.
+FEELINGSURF_URL=
+FEELINGSURF_PING_INTERVAL=300
+# FEELINGSURF_PING_TIMEOUT=10
+```
+
+```env
+# Hosted deployments (e.g. Render): point it at the FeelingSurf public URL.
+FEELINGSURF_URL=https://your-feelingsurf-service.example.com
+FEELINGSURF_PING_INTERVAL=300
+# FEELINGSURF_PING_TIMEOUT=10
+```
+
+The pinger is only disabled when none of the above yields a URL. It can never
+block, crash, or restart the 9Hits app: connection/timeout/HTTP errors are
+caught and logged (`[KeepAlive] ...`) and simply retried next interval, so a
+temporarily unreachable FeelingSurf service has zero effect on the 9Hits
+viewers. Only one request is sent per interval — no tight loop.
+
+Log output looks like:
+```
+[KeepAlive] pinger started: target=https://your-feelingsurf-service.example.com/health interval=300s timeout=10s
+[KeepAlive] FeelingSurf responded with 200
+[KeepAlive] FeelingSurf ping failed: <urlopen error timed out> on https://your-feelingsurf-service.example.com/health
+```
+
+Architecture:
+
+```
+9Hits deployment (9Hits only)         FeelingSurf deployment (separate)
+  supervisor.py  ──every 5 min──▶        FeelingSurf viewer + /health
+  + [KeepAlive] daemon thread            (Dockerfile.feelingsurf)
+  (continues running normally)           (responds to health/ping requests)
+```
 
 ### 3. Free cloud platforms
 
-The combined repository `Dockerfile` is used on cloud platforms. Configure both `ACCESS_KEY` and `ACCESS_TOKEN` on the same service.
+Two independent services. The **9Hits deployment** uses the repository
+`Dockerfile` (9Hits only) and, where it defines a second service, the
+**FeelingSurf deployment** uses `Dockerfile.feelingsurf`. Configure
+`ACCESS_KEY` (9Hits) on the 9Hits service and `ACCESS_TOKEN` (FeelingSurf) on
+the FeelingSurf service.
 
 | Platform | Deployment | Notes |
 | :--- | :--- | :--- |
-| **Oracle Cloud Always Free** | use `docker compose up -d` | One combined service; the 24 GB tier has ample memory. |
-| **Render** | Blueprint (`render.yaml`) updates the single existing **`9hits-viewer`** web service; `ACCESS_TOKEN` is preconfigured. Both viewers are on by default, with `DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=balanced` + `NH_SP=no` / `FS_SP=no` + `INIT_TIMEOUT=600` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps (`extreme`/single-process crashes with code 133 here). | The 512 MB free plan is handled by the three-layer stack (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)): memory flags shrink both Chromiums, memguard restarts the heaviest viewer before the platform OOMs the container, and the supervisor's per-slot memory cap restarts any single runaway viewer. |
-| **Koyeb** | ACCESS_KEY + ACCESS_TOKEN are hard-coded in `koyeb.yaml`. | Uses `koyeb.yaml`; one service runs both viewers. |
-| **Fly.io** | Deploy this repository Dockerfile and set both secrets. | Uses `fly.toml`; one service runs both viewers. |
-| **Railway** | Deploy this repository Dockerfile and set both secrets. | Uses `railway.json`; one service runs both viewers. |
-| **Zeabur** | Deploy this repository Dockerfile and set both secrets. | Uses `zeabur.json`; one service runs both viewers. |
+| **Oracle Cloud Always Free** | `docker compose up -d viewers` (9Hits) and `docker compose up -d feelingsurf` (FeelingSurf). | Two containers; the 24 GB tier has ample memory. |
+| **Render** | Blueprint (`render.yaml`) updates the existing **`9hits-viewer`** web service (9Hits only) and defines a separate **`feelingsurf`** web service; `ACCESS_KEY` / `ACCESS_TOKEN` are hard-coded per service. 9Hits-only: `DUAL_VIEWER_MODE=off` + `LOW_MEMORY=balanced` + `INIT_TIMEOUT=600` + `NH_MAX_MEMORY_MB=400` (`extreme`/single-process crashes with code 133 here). The 9Hits service pings the FeelingSurf service via `FEELINGSURF_URL` every 5 min. | Render's free plan allows only ONE web service — running the two services side by side needs a paid plan or another host. |
+| **Koyeb** | `ACCESS_KEY` + `ACCESS_TOKEN` are hard-coded in `koyeb.yaml` (this deploys the 9Hits deployment). | Uses `koyeb.yaml`; one service runs 9Hits. |
+| **Fly.io** | Deploy this repository Dockerfile and set `ACCESS_KEY`. | Uses `fly.toml`; one service runs 9Hits. |
+| **Railway** | Deploy this repository Dockerfile and set `ACCESS_KEY`. | Uses `railway.json`; one service runs 9Hits. |
+| **Zeabur** | Deploy this repository Dockerfile and set `ACCESS_KEY`. | Uses `zeabur.json`; one service runs 9Hits. |
 | **Hugging Face Spaces** | Standard Gradio Space; `app_hf.py` downloads and runs both viewers natively. | 16 GB runtime: 1× 9Hits system session + 3× FeelingSurf, with no memory guardian or low-memory tuning. |
 
 ### 4. Why use FeelingSurf alongside 9Hits?
@@ -474,17 +509,15 @@ Viewer config flags are applied by the **init pass** (`nhviewer <flags> --exit-o
 
 | Env var | `nhviewer` flag | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `NINEHITS_ENABLED` | — | `yes` | `yes`/`no`/`1`/`0`/`true`/`false`/`on`/`off` — run the 9Hits viewer. **Both viewers are ON by default** so a bare deploy starts 9Hits + FeelingSurf together. Set to `no` to run only FeelingSurf |
-| `FEELINGSURF_ENABLED` | — | `yes` | `yes`/`no`/`1`/`0`/`true`/`false`/`on`/`off` — run the FeelingSurf viewer (auto-disables quietly when the binary is absent, e.g. the HF Gradio runtime) |
-| `DUAL_VIEWER_MODE` | — | `auto` | `auto` / `concurrent` / `time-slice` / `off` — how the two viewers share one small box (see [Running both viewers on 512 MB](#running-both-viewers-on-512-mb-render-free)); the image/Blueprint set `concurrent` + `LOW_MEMORY=balanced` = both at the same time in 512 MB |
+| `NINEHITS_ENABLED` | — | `yes` | `yes`/`no`/`1`/`0`/`true`/`false`/`on`/`off` — run the 9Hits viewer. **ON by default** in the 9Hits deployment. |
+| `FEELINGSURF_ENABLED` | — | `no` | `yes`/`no`/`1`/`0`/`true`/`false`/`on`/`off` — run the FeelingSurf viewer. **OFF by default**: FeelingSurf runs in its own separate deployment (`Dockerfile.feelingsurf`, where this is `yes`). Set to `yes` here only to run it inside the same container as 9Hits (auto-disables quietly when the binary is absent, e.g. the HF Gradio runtime). |
+| `DUAL_VIEWER_MODE` | — | `off` | `auto` / `concurrent` / `time-slice` / `off` — how the two viewers share one small box (see [Memory on 512 MB plans](#memory-on-512-mb-plans-render-free)). **`off` by default** (single-viewer, 9Hits-only deployment); set `concurrent` only when running both viewers together. |
 | `TIME_SLICE` | — | `1500` | Seconds each viewer runs per turn in `time-slice` mode (25 min default) |
 | `LOW_MEMORY` | — | `balanced` | `auto` (flags on when box < 1 GB) / `off` / `balanced` (**default, safe on Render 512 MB**) / `extreme` (`--single-process --in-process-gpu`, ~324 MB pair in a lab but **crashes with exit 133 on Render 512 MB** — needs ≥ 2 GB) — Chromium memory-shrinking flags applied to both viewers |
 | `NH_SP` | — | `no` | Single-process for 9Hits in `extreme` mode. Auto-fallback: dropped on the next launch if the run pass dies in under 10 s (fast-crash detector), and after 3 startup crashes |
 | `FS_SP` | — | `no` | Single-process for FeelingSurf in `extreme` mode. Same auto-fallback (dropped after repeated startup crashes) |
 | `FS_GL_MODE` | — | `swiftshader` | FeelingSurf GL: `swiftshader` (upstream) or `disable-gpu` (last resort if FS crash-loops under single-process) |
 | `FS_SHARE_DISPLAY` | — | `yes` | Reuse the 9Hits Xvfb display for FeelingSurf (one less X server on tight instances) |
-| `MEMGUARD_LIMIT_MB` | — | `0` (auto-detect) | Memory budget memguard enforces; set `512` on Render free / Koyeb nano. `0` = cgroup limit, then MemTotal |
-| `MEMGUARD_HARD_PCT` | — | `97` | % of budget at which memguard restarts the heaviest viewer (97 = act at 497 MB on a 512 MB box, before the platform OOM) |
 | `CREATE_SWAP` | — | *none* | Best-effort swap size, e.g. `256M` (needs `swapon` permission; auto-tried on < 1 GB boxes) |
 | `NH_RUN_EXTRA_ARGS` | — | *none* | Raw flags appended to the 9Hits **run pass** (the init pass uses `EXTRA_ARGS`) |
 | `FS_EXTRA_FLAGS` | — | *none* | Raw flags appended to the FeelingSurf launch (last switch wins) |
@@ -507,6 +540,10 @@ Viewer config flags are applied by the **init pass** (`nhviewer <flags> --exit-o
 | `HIDE_COLUMNS` | `--hide-columns` | *none* | Dashboard columns to hide, e.g. `quality,points` |
 | `RESET_INTERVAL` | `--reset-interval` (run pass) | `2h` | Graceful self-restart interval (`2h`, `6h`, `30m`) |
 | `PORT` | — | `10000` | Port for `/health` endpoint |
+| `FEELINGSURF_URL` | — | *none* | Public URL of the **separate** FeelingSurf deployment, e.g. `https://your-feelingsurf-service.example.com`. Highest priority source for the keep-alive pinger (`keepalive.py`), which GETs `<URL>/health` (falling back to `<URL>/`) every `FEELINGSURF_PING_INTERVAL` s. On docker-compose this is auto-set to the internal service DNS (`http://feelingsurf:10000`) so no URL is needed. Falls back to `FEELINGSURF_INTERNAL_URL`, then platform auto-detection. |
+| `FEELINGSURF_INTERNAL_URL` | — | *none* | In-cluster/internal DNS of the FeelingSurf deployment when it shares the 9Hits network, e.g. `http://feelingsurf:10000`. Used when `FEELINGSURF_URL` is unset. |
+| `FEELINGSURF_PING_INTERVAL` | — | `300` | Seconds between FeelingSurf keep-alive pings (default 300 = 5 min) |
+| `FEELINGSURF_PING_TIMEOUT` | — | `10` | Per-request timeout (s) for the keep-alive ping |
 | `SUPERVISOR_DELAY` | — | `10` | Base restart cooldown (s) before relaunching an exited slot (alias: `RESTART_DELAY`) |
 | `SUPERVISOR_MAX_DELAY` | — | `120` | Ceiling for the exponential backoff when a slot keeps crash-looping |
 | `SUPERVISOR_PARK_AFTER` | — | `10` | After N rapid crashes the slot is parked (cooldown extended) |
@@ -514,7 +551,7 @@ Viewer config flags are applied by the **init pass** (`nhviewer <flags> --exit-o
 | `SUPERVISOR_TICK` | — | `0.5` | Main loop tick (s). Lower = faster signal/crash response, slightly higher steady-state CPU |
 | `NINEHITS_CHECK_INTERVAL` | — | `30` | Seconds between expensive 9Hits checks (memory, child count) |
 | `FEELINGSURF_CHECK_INTERVAL` | — | `30` | Seconds between expensive FeelingSurf checks |
-| `LOG_DIR` | — | `/logs` | Per-slot log directory. `logs/9hits.log`, `logs/feelingsurf.log`, `logs/memguard.log`, `logs/health.log`, `logs/supervisor.log` |
+| `LOG_DIR` | — | `/logs` | Per-slot log directory. `logs/9hits.log`, `logs/feelingsurf.log`, `logs/health.log`, `logs/supervisor.log` |
 | `SLOT_LOG_MAX_BYTES` | — | `10485760` | Rotate per-slot log when it exceeds this size |
 | `SLOT_LOG_BACKUPS` | — | `2` | Number of rotated copies to keep per slot |
 | `NH_MAX_MEMORY_MB` / `NINEHITS_MAX_MEMORY_MB` | — | `0` | Per-slot memory cap (PSS of the process tree, two consecutive samples). When exceeded for two consecutive checks, gracefully restart ONLY 9Hits. Uses `/proc/<pid>/smaps_rollup` PSS with VmRSS fallback. Sensible value on 512 MB free: `400` |
@@ -582,17 +619,15 @@ GET https://<your-service>/health
   "supervisor_version": "2.0.0",
   "ninehits_running": true,             // back-compat top-level booleans
   "feelingsurf_running": true,          // (true | false | "disabled")
-  "memguard_status": "running", "memguard_pid": 12,
   "health_status": "running", "health_pid": 1,
-  "dual_viewer_mode": "auto",
-  "effective_mode": "concurrent",
-  "active_viewer": "both",
-  "memory_used_mb": 312.4,             // total container RSS (memguard)
+  "dual_viewer_mode": "off",
+  "effective_mode": "off",
+  "active_viewer": "ninehits",
+  "memory_used_mb": 312.4,             // total container RSS
   "memory_limit_mb": 512,
   "memory_peak_mb": 351.1,
   "ninehits_rss_mb": 110.2,
   "feelingsurf_rss_mb": 198.6,
-  "memguard_interventions": 0,
   "uptime_seconds": 1234,
   "low_memory": "extreme",
   "slots": { /* full supervisor state per slot, used by the dashboard */ }
@@ -636,7 +671,7 @@ Point any free uptime monitor (**UptimeRobot, Better Stack, Cron-job.org, Kuma**
 
 ## Troubleshooting
 
-* **Render: `Ran out of memory (used over 512MB)` → "Service recovered" → repeat (~1/min)** — the classic symptom of two un-tuned Chromium viewers on the free 512 MB plan. The current Blueprint runs **both viewers** with the 512 MB survival stack (`DUAL_VIEWER_MODE=concurrent` + `LOW_MEMORY=balanced` + `NH_SP=no` / `FS_SP=no` + `INIT_TIMEOUT=600` + `MEMGUARD_LIMIT_MB=512` + per-viewer 400 MB caps), which keeps RSS under the limit: memguard restarts the heaviest viewer before the platform can kill the container, and the supervisor's per-slot memory cap restarts any single runaway viewer. Check `/health` → `effective_mode` / `memory_used_mb` / `memguard_interventions`. If you still see OOM (e.g. a proxy list with many sessions), lower the session count, set `FEELINGSURF_ENABLED=no`, or move to a ≥ 2 GB plan (9Hits v6's official recommendation).
+* **Render: `Ran out of memory (used over 512MB)` → "Service recovered" → repeat (~1/min)** — historically caused by two un-tuned Chromium viewers on the free 512 MB plan. The deployment is now **9Hits-only** (`FEELINGSURF_ENABLED=no`, `DUAL_VIEWER_MODE=off`; FeelingSurf runs in its own separate service), so a single viewer easily fits 512 MB and the old dual-viewer memory guardian (`memguard.py`) was removed. The supervisor's per-slot cap (`NH_MAX_MEMORY_MB=400`) still restarts 9Hits if it runs away. If you still see OOM (e.g. a proxy list with many sessions), lower the session count, or move to a ≥ 2 GB plan (9Hits v6's official recommendation).
 * **`Auth: Duplicate USER on IP [x.x.x.x]`** — Another 9Hits user is already using that public/shared proxy IP. Switch to a system session on a dedicated cloud provider, refresh your Webshare list, or use private proxies.
 * **`Auth: Duplicate SESSION on IP [x.x.x.x]`** — Multiple sessions from your account on the same IP. Ensure `SYSTEM_SESSION=no` when using proxies, or enable `CLEAR_ALL_SESSIONS=yes` to clear lingering connections.
 * **`Pool error: The public pool is closed!`** — Set `EX_PROXY_SESSIONS=0` (or unset it) and use `BULK_ADD_PROXY_LIST` / `BULK_ADD_PROXY_LIST_URL`, or provide your own custom pool via `EX_PROXY_URL`.

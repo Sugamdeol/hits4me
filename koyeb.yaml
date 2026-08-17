@@ -26,33 +26,26 @@ services:
     env:
       - key: PORT
         value: "10000"
-      # 9Hits access key (hard-coded) + FeelingSurf token.
+      # 9Hits access key (hard-coded). FeelingSurf runs in its own separate
+      # deployment; this service is 9Hits-only.
       - key: ACCESS_KEY
         value: "23f9097a8d823267188c49b3cc0598b1"
-      - key: ACCESS_TOKEN
-        value: "27f77ef00e768cdbdc7352f3456e35b5"
-      # Koyeb nano = 512 MB. LOW_MEMORY=extreme (both viewers single-process,
-      # measured ~324 MB pair) + DUAL_VIEWER_MODE=concurrent = BOTH viewers at
-      # the same time. memguard acts at 97% of the budget as the safety valve;
-      # crash auto-fallback drops single-process if a viewer crash-loops.
+      # Koyeb nano = 512 MB. 9Hits-only: FEELINGSURF_ENABLED=no,
+      # DUAL_VIEWER_MODE=off. LOW_MEMORY=extreme (--single-process) is NOT used
+      # here because it crashes with code 133 on small instances; balanced is
+      # the safe default. NH_MAX_MEMORY_MB restarts 9Hits if it runs away.
       - key: NINEHITS_ENABLED
         value: "yes"
       - key: FEELINGSURF_ENABLED
-        value: "yes"
+        value: "no"
       - key: DUAL_VIEWER_MODE
-        value: "concurrent"
+        value: "off"
       - key: LOW_MEMORY
-        value: "extreme"
+        value: "balanced"
       - key: NH_SP
-        value: "yes"
-      - key: FS_SP
-        value: "yes"
-      - key: FS_GL_MODE
-        value: "swiftshader"
-      - key: MEMGUARD_LIMIT_MB
-        value: "512"
-      - key: MEMGUARD_HARD_PCT
-        value: "97"
+        value: "no"
+      - key: NH_MAX_MEMORY_MB
+        value: "400"
       - key: CLEAR_ALL_SESSIONS
         value: "yes"
       - key: SYSTEM_SESSION

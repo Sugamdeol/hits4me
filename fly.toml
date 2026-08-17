@@ -1,4 +1,4 @@
-# fly.toml app configuration for the combined 9Hits + FeelingSurf viewer
+# fly.toml app configuration for the 9Hits deployment (9Hits only).
 # Docs: https://fly.io/docs/reference/configuration/
 
 app = "hits4me-9hits"
@@ -9,10 +9,16 @@ primary_region = "iad"
 
 [env]
   PORT = "10000"
-  # 4 GB RAM configured below -> both viewers fit concurrently.
+  # 9Hits access key baked in by default - no manual `fly secrets set` needed.
+  ACCESS_KEY = "23f9097a8d823267188c49b3cc0598b1"
+  # Optional: point the keep-alive pinger at your separate FeelingSurf service.
+  FEELINGSURF_URL = "https://your-feelingsurf-service.example.com"
+  FEELINGSURF_PING_INTERVAL = "300"
+  # 9Hits-only deployment. FeelingSurf runs in its own separate deployment
+  # (Dockerfile.feelingsurf). 4 GB below is plenty for the single viewer.
   NINEHITS_ENABLED = "yes"
-  FEELINGSURF_ENABLED = "yes"
-  DUAL_VIEWER_MODE = "concurrent"   # 4 GB: no need for time-slicing
+  FEELINGSURF_ENABLED = "no"
+  DUAL_VIEWER_MODE = "off"
   LOW_MEMORY = "auto"               # auto: flags off on a 4 GB box
   CLEAR_ALL_SESSIONS = "yes"
   SYSTEM_SESSION = "yes"
@@ -47,7 +53,7 @@ primary_region = "iad"
     path = "/health"
 
 [[vm]]
-  # Both Chromium-based viewers need substantially more than 512 MB together.
+  # A single Chromium-based viewer runs comfortably in 4 GB.
   memory = "4gb"
   cpu_kind = "shared"
   cpus = 2
