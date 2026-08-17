@@ -1,0 +1,61 @@
+# ============================================================================
+# Otohits  +  FeelingSurf, run together with one command.
+#
+#   docker compose -f docker-compose.otohits.yml up -d
+#
+# What this brings up:
+#   1. otohits      -> official otohits/app agent (otohits/app:latest),
+#                      surfs headlessly on the application key below.
+#   2. feelingsurf  -> the FeelingSurf viewer, built from ./snapdeploy
+#                      (Notesly notes front on :3000 + background worker).
+#
+# Check status:
+#   curl http://localhost:3000/        # FeelingSurf notes front (+ /health)
+#   docker compose -f docker-compose.otohits.yml logs -f otohits
+#   docker compose -f docker-compose.otohits.yml logs -f feelingsurf
+#
+# Stop / remove:
+#   docker compose -f docker-compose.otohits.yml down
+#
+# Override the keys without editing this file:
+#   OTOHITS_APPLICATION_KEY=xxxx FEELINGSURF_ACCESS_TOKEN=yyyy \
+#     docker compose -f docker-compose.otohits.yml up -d
+# ============================================================================
+
+services:
+  # --------------------------------------------------------------------------
+  # Otohits agent — https://hub.docker.com/r/otohits/app
+  # Only needs APPLICATION_KEY (https://www.otohits.net/account/app).
+  # --------------------------------------------------------------------------
+  otohits:
+    image: otohits/app:latest
+    container_name: otohits
+    init: true
+    environment:
+      APPLICATION_KEY: "${OTOHITS_APPLICATION_KEY:-a6c4c312-c270-42c8-8ae5-31759f337ecc}"
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # FeelingSurf viewer — built from the ./snapdeploy folder.
+  # Public port :3000 serves the Notesly notes site (its /health endpoint);
+  # the worker runs headlessly in the background on the container IP.
+  # --------------------------------------------------------------------------
+  feelingsurf:
+    build:
+      context: ./snapdeploy
+      dockerfile: Dockerfile
+    container_name: feelingsurf
+    init: true
+    environment:
+      access_token: "${FEELINGSURF_ACCESS_TOKEN:-27f77ef00e768cdbdc7352f3456e35b5}"
+      PORT: "3000"
+      WORKER_HEALTH_PORT: "3100"
+      NOTES_DATA: "/home/notesly/.notesly/notes.json"
+      SUPERVISOR_DELAY: "10"
+    ports:
+      - "3000:3000"
+    shm_size: 2g
+    tmpfs:
+      - /tmp
+      - /dev/shm
+    restart: unless-stopped
