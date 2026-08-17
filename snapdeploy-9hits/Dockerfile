@@ -7,7 +7,12 @@
 #
 # The worker access key is hardcoded below (ENV ACCESS_KEY) so no variable is
 # required in SnapDeploy; it can still be overridden at runtime.
-FROM 9hitste/appv6
+#
+# The 9Hits Viewer is x86_64-only, so the base image platform is pinned to
+# linux/amd64. Without this pin BuildKit requests the builder's own
+# architecture and fails with "no match for platform in manifest: not found"
+# when 9hitste/appv6 has no manifest for that platform.
+FROM --platform=linux/amd64 9hitste/appv6
 
 LABEL org.opencontainers.image.title="Notesly for SnapDeploy" \
       org.opencontainers.image.description="Notes website service for SnapDeploy" \
