@@ -110,6 +110,41 @@ docker compose up -d
 
 ---
 
+### 6. Otohits + FeelingSurf (combined, any Docker host)
+
+Want the **Otohits agent** (a third traffic-exchange service) running *alongside*
+the FeelingSurf viewer? This repo ships a dedicated Compose file that brings
+both up with a single command — no cloud account required:
+
+```bash
+# From the repo root
+docker compose -f docker-compose.otohits.yml up -d
+
+# FeelingSurf notes front + /health:
+curl http://localhost:3000/health
+
+# Otohits surf activity:
+docker compose -f docker-compose.otohits.yml logs -f otohits
+```
+
+* `otohits`      — official `otohits/app:latest`, surfed headlessly on
+  `APPLICATION_KEY` (get yours at <https://www.otohits.net/account/app>).
+* `feelingsurf`  — the FeelingSurf viewer built from `./snapdeploy`,
+  serving the Notesly notes site on `:3000` with the worker in the background.
+
+Override either key without editing the file:
+
+```bash
+OTOHITS_APPLICATION_KEY=xxxx FEELINGSURF_ACCESS_TOKEN=yyyy \
+  docker compose -f docker-compose.otohits.yml up -d
+```
+
+> The Otohits `APPLICATION_KEY` is a credential — it is set as a default in the
+> Compose file for convenience. Rotate it at otohits.net and prefer passing it
+> via the env var above (or a `.env` file) rather than committing it.
+
+---
+
 ## Proxy Setup (Running Multiple Sessions on 1 Machine)
 
 > ⚠️ **IMPORTANT: The 9Hits public proxy pool is CLOSED.**
