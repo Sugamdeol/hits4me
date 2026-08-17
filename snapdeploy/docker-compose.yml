@@ -1,0 +1,12 @@
+services:
+  feelingsurf:
+    build: .
+    environment:
+      access_token: "${ACCESS_TOKEN:?Set ACCESS_TOKEN in .env}"
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    tmpfs:
+      - /tmp
+      - /dev/shm
+    restart: unless-stopped

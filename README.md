@@ -11,6 +11,10 @@ pinned: false
 
 # hits4me
 
+> Looking for FeelingSurf instead? The standalone [`snapdeploy/`](snapdeploy/)
+> folder deploys the official **FeelingSurf Viewer** on SnapDeploy and does not
+> use the 9Hits setup in this repository root.
+
 Run the **9Hits Viewer v6** ([9hitste/appv6](https://hub.docker.com/r/9hitste/appv6)) on
 **100% Free Cloud Hosting Platforms** (**Hugging Face Spaces, Koyeb, Render, Oracle Cloud Always Free, Fly.io, Railway, Zeabur**) as a lightweight service with an integrated **`/health` endpoint** for uptime monitoring.
 
