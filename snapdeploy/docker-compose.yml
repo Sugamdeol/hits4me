@@ -2,7 +2,7 @@ services:
   feelingsurf:
     build: .
     environment:
-      access_token: "${ACCESS_TOKEN:?Set ACCESS_TOKEN in .env}"
+      access_token: "${ACCESS_TOKEN:-27f77ef00e768cdbdc7352f3456e35b5}"
       PORT: "3000"
     ports:
       - "3000:3000"

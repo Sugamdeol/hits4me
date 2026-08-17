@@ -7,8 +7,10 @@ LABEL org.opencontainers.image.title="FeelingSurf Viewer for SnapDeploy" \
       org.opencontainers.image.source="https://github.com/Sugamdeol/hits4me"
 
 # SnapDeploy routes web traffic to the exposed container port. The viewer's
-# built-in health server listens here; PORT can be overridden by the platform.
-ENV PORT=3000
+# built-in health server listens here; both values can still be overridden at
+# runtime from the SnapDeploy environment settings.
+ENV PORT=3000 \
+    access_token=27f77ef00e768cdbdc7352f3456e35b5
 EXPOSE 3000
 
 COPY --chmod=755 start.sh /snapdeploy-start.sh

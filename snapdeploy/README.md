@@ -14,22 +14,18 @@ exposes the viewer's built-in health endpoint on port `3000` (or the port in
 1. In SnapDeploy, create a container from this GitHub repository.
 2. Enable monorepo/root-directory selection and set the root directory to
    **`snapdeploy`**. SnapDeploy will detect `snapdeploy/Dockerfile` there.
-3. Add this secret environment variable:
-
-   | Name | Value |
-   | --- | --- |
-   | `access_token` | Your private FeelingSurf access token |
-
-   `ACCESS_TOKEN` (upper-case) is also accepted as a convenience. Do not set
-   both; `access_token` takes precedence.
-4. Set the container/internal port to **`3000`** if SnapDeploy asks for it.
+3. Set the container/internal port to **`3000`** if SnapDeploy asks for it.
    The included Dockerfile already exposes that port.
-5. Deploy. The public URL and `/` endpoint are used as the container health
+4. Deploy. The public URL and `/` endpoint are used as the container health
    endpoint; the viewer itself runs headlessly in the background.
 
-> **Keep the token secret.** A FeelingSurf access token grants access to your
-> account. Add it through SnapDeploy's secret/environment-variable settings,
-> never in the Dockerfile or Git history.
+The requested FeelingSurf access token is embedded in the image configuration,
+so no token variable is required in SnapDeploy. You can override it at runtime
+by setting `access_token` in SnapDeploy's environment settings.
+
+> **Security warning:** The embedded token is visible to anyone who can read
+> this repository or inspect the built image. Rotate the token in FeelingSurf
+> and switch to a SnapDeploy secret if the repository or image is shared.
 
 ## Resources
 
@@ -45,9 +41,13 @@ free service may violate the hosting plan's intended usage.
 
 ```bash
 cd snapdeploy
-cp .env.example .env
-# Put your real token in .env, then:
 docker compose up --build
+```
+
+The embedded token is used by default. To test with a different token:
+
+```bash
+ACCESS_TOKEN=another_token docker compose up --build
 ```
 
 In another terminal:
@@ -62,6 +62,6 @@ Stop and remove the test container with `docker compose down`.
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `access_token` | Yes | — | Official FeelingSurf authentication variable |
-| `ACCESS_TOKEN` | Alternative | — | Alias used only when `access_token` is unset |
+| `access_token` | No | Embedded token | Official FeelingSurf authentication variable; overrides the image default |
+| `ACCESS_TOKEN` | No | — | Convenience override used by the local Compose file |
 | `PORT` | No | `3000` | HTTP health endpoint/container port |
