@@ -74,19 +74,17 @@ Each provider assigns an isolated, clean datacenter outbound IP address:
 ---
 
 ### 3. Render (100% Free Docker Web Service)
-1. In [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** (connect this repo).
-2. Or create **New → Web Service** → Docker runtime → Free tier.
-3. Paste `ACCESS_KEY` when prompted.
-4. Set Environment Variables:
-   ```env
-   ACCESS_KEY=<your-key>
-   SYSTEM_SESSION=yes
-   CLEAR_ALL_SESSIONS=yes
-   SESSION_NOTE=render-system
-   NOTE=render-oregon
-   RESET_INTERVAL=2h
-   ```
-5. *(Optional)* Deploy another free service in a different region (e.g. Frankfurt or Ohio) to get an extra unique IP address.
+1. In [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** (connect this repo) → **Apply**.
+2. The included [`render.yaml`](render.yaml) is a **two-service blueprint** — it creates both deployments in one click, with the access tokens **hard coded** (Render will not prompt for any secrets):
+   | Service | What it runs | Builds from | Hard-coded token var |
+   | :--- | :--- | :--- | :--- |
+   | `9hits-viewer` | The original 9Hits Viewer v6 + `/health` | repo-root `Dockerfile` | `ACCESS_KEY` |
+   | `notesly` | FeelingSurf Viewer (Notesly notes front — see [`snapdeploy/`](snapdeploy/)) | `snapdeploy/Dockerfile` | `access_token` |
+3. Wait for both Docker builds to finish — you get:
+   - `https://9hits-viewer.onrender.com/health`
+   - `https://notesly.onrender.com/health` (public pages show the notes website)
+4. *(Optional)* Change `SYSTEM_SESSION` to `yes` on the 9Hits service to add a direct session on Render's IP, or deploy another free service in a different region (e.g. Frankfurt or Ohio) to get an extra unique IP address.
+5. *(Note)* FeelingSurf recommends ~2 GB RAM per viewer; on the free 512 MB plan the `notesly` service may restart if it exceeds the memory limit. Upgrade that one service to a paid plan if you need it fully stable. Render's free tier includes 750 instance-hours/month shared across the workspace — two always-on services use ~1440 h, so let one of them sleep or expect a paid plan requirement.
 
 ---
 

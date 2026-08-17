@@ -1,10 +1,19 @@
-# Render Blueprint - deploys the 9Hits viewer + /health endpoint as one web
-# service. Use it via: Render Dashboard -> New -> Blueprint -> connect this
-# repo. ACCESS_KEY is prompted as a secret during the deploy.
+# Render Blueprint - deploys BOTH viewers as web services in one click:
+#
+#   1. 9hits-viewer  - the original 9Hits Viewer v6 (root Dockerfile)
+#   2. notesly       - the FeelingSurf Viewer (snapdeploy/ folder, Notesly
+#                      front, keeps the service discreet on its public URL)
+#
+# Access tokens are HARD CODED below for both services - Render will NOT
+# prompt for any secrets when the blueprint is applied. Just use:
+# Render Dashboard -> New -> Blueprint -> connect this repo -> Apply.
 #
 # Docs: https://render.com/docs/blueprint-spec
 
 services:
+  # ==========================================================================
+  # 1) 9Hits Viewer v6 (original one) - https://hub.docker.com/r/9hitste/appv6
+  # ==========================================================================
   - type: web
     name: 9hits-viewer
     runtime: docker
@@ -12,7 +21,7 @@ services:
     plan: free
     healthCheckPath: /health
     envVars:
-      # Prompted as a secret when the blueprint is applied.
+      # Hard coded 9Hits access key - no prompt when the blueprint applies.
       # Get it at https://panel.9hits.com/user/profile
       - key: ACCESS_KEY
         value: "23f9097a8d823267188c49b3cc0598b1"
@@ -62,3 +71,39 @@ services:
       # change the service port in the dashboard.
       - key: PORT
         value: "10000"
+
+  # ==========================================================================
+  # 2) FeelingSurf Viewer (snapdeploy/ folder) - Notesly notes website front,
+  #    worker runs headlessly in the background. Public URL looks like a
+  #    normal notes app; /health returns JSON for uptime pings.
+  #
+  #    NOTE: FeelingSurf recommends ~2 GB RAM per viewer. It will run on the
+  #    free 512 MB plan, but may hit the memory limit under load - consider
+  #    switching this service to the starter plan if it restarts often.
+  # ==========================================================================
+  - type: web
+    name: notesly
+    runtime: docker
+    rootDir: ./snapdeploy
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      # Hard coded FeelingSurf access token (the official variable is the
+      # lower-case 'access_token'). It is also baked into the image itself
+      # (ENV in snapdeploy/Dockerfile), so this is belt-and-braces.
+      # Manage it at https://dash.feelingsurf.fr
+      - key: access_token
+        value: "27f77ef00e768cdbdc7352f3456e35b5"
+
+      # Render injects PORT=10000 by default; the Notesly front binds
+      # 0.0.0.0:$PORT. Keep it explicit so the build default (3000) is never
+      # picked up by accident.
+      - key: PORT
+        value: "10000"
+      # Internal loopback-only health server of the worker (must differ from
+      # PORT).
+      - key: WORKER_HEALTH_PORT
+        value: "3100"
+      - key: SUPERVISOR_DELAY
+        value: "10"
