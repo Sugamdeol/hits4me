@@ -38,6 +38,12 @@ background.
 
 ## Deploy
 
+> **Render alternative:** this folder can also be deployed on Render as the
+> `notesly` web service via the repo-root [`render.yaml`](../render.yaml)
+> blueprint (with the access token hard coded). See the Render section of the
+> [root README](../README.md) — one blueprint apply creates it together with
+> the original 9Hits viewer service.
+
 1. In SnapDeploy, create a container from this GitHub repository.
 2. Enable monorepo/root-directory selection and set the root directory to
    **`snapdeploy`**. SnapDeploy will detect `snapdeploy/Dockerfile` there.
