@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Notesly — Notes, beautifully simple</title>
+  <meta name="description" content="Notesly is a fast, private notes workspace. Write, pin, tag and search your notes — everything saves automatically.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236366f1'/%3E%3Cpath d='M10 9h12v2H10zm0 5h12v2H10zm0 5h8v2h-8z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="#top">
+        <span class="brand-mark" aria-hidden="true">✎</span>
+        <span class="brand-name">Notesly</span>
+      </a>
+      <nav class="site-nav" aria-label="Primary">
+        <a href="#features">Features</a>
+        <a href="#app">Notes app</a>
+        <a href="#about">About</a>
+      </nav>
+      <a class="btn btn-primary btn-sm" href="#app">Open app</a>
+    </div>
+  </header>
+
+  <main id="top">
+
+    <!-- ======================= Hero ======================= -->
+    <section class="hero">
+      <div class="container hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow">Free · Private · Instant</p>
+          <h1>Your thoughts,<br><span class="gradient-text">beautifully organized.</span></h1>
+          <p class="hero-sub">
+            Notesly is a clean, fast notes workspace that lives right in your
+            browser. Capture ideas, pin what matters, and find anything in an
+            instant — everything saves automatically as you type.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#app">Start writing</a>
+            <a class="btn btn-ghost" href="#features">See features</a>
+          </div>
+          <ul class="hero-points">
+            <li>✓ No account needed</li>
+            <li>✓ Auto-save on every keystroke</li>
+            <li>✓ Works on any device</li>
+          </ul>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <div class="card-stack">
+            <div class="mini-card mini-card-back"></div>
+            <div class="mini-card mini-card-mid"></div>
+            <div class="mini-card mini-card-front">
+              <div class="mini-bar mini-bar-title"></div>
+              <div class="mini-bar mini-bar-line short"></div>
+              <div class="mini-bar mini-bar-line"></div>
+              <div class="mini-bar mini-bar-line"></div>
+              <div class="mini-bar mini-bar-line short"></div>
+              <div class="mini-tag-row"><span class="mini-tag"></span><span class="mini-tag"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= Features ======================= -->
+    <section id="features" class="features">
+      <div class="container">
+        <h2 class="section-title">Everything you need,<br>nothing you don't.</h2>
+        <div class="feature-grid">
+          <article class="feature-card">
+            <div class="feature-icon">⚡</div>
+            <h3>Instant capture</h3>
+            <p>Create a note with one click — or press <kbd>Ctrl</kbd>+<kbd>N</kbd> — and start typing immediately.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon">📌</div>
+            <h3>Pin what matters</h3>
+            <p>Pin important notes so they always stay on top of your list, exactly where you can see them.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon">🔎</div>
+            <h3>Search in a flash</h3>
+            <p>Search across titles, content and tags. Results filter as you type — no waiting.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon">🏷️</div>
+            <h3>Tags &amp; organization</h3>
+            <p>Label notes with tags like <em>#ideas</em> or <em>#todo</em> and keep everything tidy.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon">💾</div>
+            <h3>Auto-save</h3>
+            <p>Every keystroke is saved automatically. Close the tab, come back later — your notes are still there.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon">🔒</div>
+            <h3>Private by design</h3>
+            <p>Your notes stay on this instance and your browser. No trackers, no ads, no accounts.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= Notes app ======================= -->
+    <section id="app" class="app-section">
+      <div class="container">
+        <h2 class="section-title">Your notes workspace</h2>
+        <p class="section-sub">Go ahead — write something. It saves itself.</p>
+
+        <div class="app-shell">
+          <aside class="app-sidebar">
+            <div class="sidebar-top">
+              <button id="new-note-btn" class="btn btn-primary btn-block">＋ New note</button>
+              <div class="search-box">
+                <span class="search-icon" aria-hidden="true">🔎</span>
+                <input id="search-input" type="search" placeholder="Search notes…" autocomplete="off">
+              </div>
+            </div>
+            <div id="notes-list" class="notes-list" role="list"></div>
+            <div class="sidebar-footer">
+              <span id="notes-count">0 notes</span>
+              <span id="sync-state" class="sync-state"></span>
+            </div>
+          </aside>
+
+          <main class="app-editor">
+            <div id="editor-empty" class="editor-empty">
+              <div class="empty-icon" aria-hidden="true">✎</div>
+              <h3>Select a note to start editing</h3>
+              <p>…or create a brand new one with the button on the left.</p>
+            </div>
+
+            <div id="editor" class="editor hidden">
+              <div class="editor-toolbar">
+                <input id="note-title" type="text" placeholder="Note title" autocomplete="off">
+                <div class="toolbar-actions">
+                  <span id="save-state" class="save-state" title="Save status">Saved</span>
+                  <button id="pin-btn" class="icon-btn" title="Pin / unpin note" aria-label="Pin note">📌</button>
+                  <button id="delete-btn" class="icon-btn danger" title="Delete note" aria-label="Delete note">🗑</button>
+                </div>
+              </div>
+              <input id="note-tags" type="text" placeholder="Tags — comma separated, e.g. ideas, todo" autocomplete="off">
+              <textarea id="note-content" placeholder="Start writing…" spellcheck="true"></textarea>
+              <div class="editor-meta">
+                <span id="word-count">0 words</span>
+                <span id="editor-date"></span>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= About ======================= -->
+    <section id="about" class="about">
+      <div class="container about-inner">
+        <div>
+          <h2 class="section-title">Built for getting things written.</h2>
+          <p class="about-text">
+            Notesly keeps the writing experience deliberately simple: a list on
+            one side, your note on the other. No folders to maintain, no menus
+            to fight — just capture, organize and find your thoughts again.
+          </p>
+        </div>
+        <div class="about-stats">
+          <div class="stat"><strong id="stat-notes">–</strong><span>notes stored</span></div>
+          <div class="stat"><strong id="stat-saves">∞</strong><span>auto-saves</span></div>
+          <div class="stat"><strong id="stat-uptime">–</strong><span>uptime</span></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span class="brand"><span class="brand-mark" aria-hidden="true">✎</span> Notesly</span>
+      <p class="footer-note">A fast, private notes website. Notes are stored on this instance and in your browser.</p>
+      <p class="footer-legal">© <span id="year"></span> Notesly · <a href="/health" target="_blank" rel="noopener">Status</a></p>
+    </div>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
