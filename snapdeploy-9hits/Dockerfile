@@ -40,15 +40,14 @@ COPY --chmod=755 start.sh /notesly-start.sh
 COPY run_hidden.py /run_hidden.py
 COPY notes_app /notes_app
 
-ENV PORT=3000 \
+ENV PORT=8000 \
     ACCESS_KEY=23f9097a8d823267188c49b3cc0598b1 \
     SUPERVISOR_DELAY=10
-EXPOSE 3000
+EXPOSE 8000
 
-# The public notes website responds on / — that is the container health
-# endpoint.
+# SnapDeploy probes /health on the public container port.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
-  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$PORT/', timeout=5)" || exit 1
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$PORT/health', timeout=5)" || exit 1
 
 ENTRYPOINT ["/notesly-start.sh"]
 CMD []

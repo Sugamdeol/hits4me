@@ -4,7 +4,7 @@ This folder is a standalone deployment for
 [SnapDeploy](https://snapdeploy.dev/). It does not touch any of the files in
 the repository root.
 
-* The public URL (container port `3000`) serves **Notesly**, a complete,
+* The public URL (container port `8000`) serves **Notesly**, a complete,
   working notes app — landing page, feature sections and a real notes editor
   (create / pin / search / tag / auto-save), with notes persisted server-side
   in a JSON file and mirrored in the browser.
@@ -35,15 +35,40 @@ background.
 
 ## Deploy
 
+This service **must be built from its Dockerfile**. Do not deploy it with
+SnapDeploy's generated Python runtime: the custom base image contains the
+background worker and the Dockerfile already defines the container entrypoint.
+
+Use these SnapDeploy settings:
+
+| Setting | Value |
+| --- | --- |
+| Repository branch | `main` (or the branch containing this folder) |
+| Root directory / working directory | `snapdeploy-9hits` |
+| Build type | Dockerfile / custom Docker image |
+| Dockerfile | `Dockerfile` (relative to the root directory) |
+| Architecture | `linux/amd64` / x86_64 |
+| Start command | **Leave empty** |
+| Container port | `8000` |
+| Health-check path | `/health` (or `/`) |
+
 1. In SnapDeploy, create a container from this GitHub repository.
 2. Enable monorepo/root-directory selection and set the root directory to
-   **`snapdeploy-9hits`**. SnapDeploy will detect `snapdeploy-9hits/Dockerfile`
-   there.
-3. Set the container/internal port to **`3000`** if SnapDeploy asks for it.
-   The included Dockerfile already exposes that port.
-4. Deploy. The public URL and `/` endpoint are used as the container health
-   endpoint (the notes website answers `200` there); the worker runs
-   headlessly in the background.
+   **`snapdeploy-9hits`**.
+3. Select the Dockerfile/custom-container build type. Confirm the build log
+   starts from `9hitste/appv6`; if it says it detected a Python app, return to
+   the build settings instead of deploying it.
+4. Clear any detected or previously saved **Start Command**. In particular,
+   do not enter `python app.py`: this deployment is started by the Dockerfile's
+   `/notesly-start.sh` entrypoint. If the UI requires a value, use the literal
+   command below (plain text, without Markdown brackets or a URL):
+
+   ```text
+   /notesly-start.sh
+   ```
+
+5. Set the container/internal port to **`8000`** and the health path to
+   **`/health`** (or `/`), then deploy.
 
 The access key is embedded in the image configuration, so no token variable is
 required in SnapDeploy. You can override it at runtime by setting
@@ -52,6 +77,27 @@ required in SnapDeploy. You can override it at runtime by setting
 > **Security warning:** The embedded key is visible to anyone who can read
 > this repository or inspect the built image. Rotate the key in the panel and
 > switch to a SnapDeploy secret if the repository or image is shared.
+
+### Startup error: `can't open file '/app/[app.py](http://app.py)'`
+
+This message means SnapDeploy is launching a generated Python container with a
+malformed Start Command. `[app.py](http://app.py)` is Markdown link syntax,
+not a filename. It is not emitted by this folder's Dockerfile.
+
+Fix the existing container in **Settings → Build/Deploy**:
+
+1. Set the root directory to `snapdeploy-9hits` and the build type to
+   **Dockerfile**.
+2. Delete the entire Start Command so the image entrypoint is used. If
+   SnapDeploy will not accept an empty value, enter exactly
+   `/notesly-start.sh`.
+3. Confirm the target architecture is x86_64/AMD64, save, and trigger a clean
+   rebuild (not merely a restart of the old image).
+
+A correct startup log begins with `[notesly] Notesly notes website started`.
+The reported exit code `137` is a consequence of SnapDeploy stopping the
+failed task; the missing/malformed startup filename is the root cause in this
+case.
 
 ## What is served where
 
@@ -99,8 +145,8 @@ ACCESS_KEY=another_key docker compose up --build
 In another terminal:
 
 ```bash
-curl http://localhost:3000/          # notes website
-curl http://localhost:3000/health    # status
+curl http://localhost:8000/          # notes website
+curl http://localhost:8000/health    # status
 ```
 
 Stop and remove the test container with `docker compose down`.
@@ -110,7 +156,7 @@ Stop and remove the test container with `docker compose down`.
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `ACCESS_KEY` | No | Embedded key | Worker access key; overrides the image default |
-| `PORT` | No | `3000` | Notes website / container port |
+| `PORT` | No | `8000` | Notes website / container port |
 | `SUPERVISOR_DELAY` | No | `10` | Seconds the supervisor waits before relaunching a crashed worker |
 | `SYSTEM_SESSION` | No | `yes` | Run a direct session on the container IP |
 | `CLEAR_ALL_SESSIONS` | No | `yes` | Clear stale sessions on boot |

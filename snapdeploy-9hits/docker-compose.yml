@@ -3,9 +3,9 @@ services:
     build: .
     environment:
       ACCESS_KEY: "${ACCESS_KEY:-23f9097a8d823267188c49b3cc0598b1}"
-      PORT: "3000"
+      PORT: "8000"
     ports:
-      - "3000:3000"
+      - "8000:8000"
     tmpfs:
       - /tmp
       - /dev/shm

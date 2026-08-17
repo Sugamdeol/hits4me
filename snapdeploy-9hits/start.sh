@@ -21,8 +21,9 @@ if [ -z "$ACCESS_KEY" ]; then
   exit 1
 fi
 
-PORT="${PORT:-3000}"
+PORT="${PORT:-8000}"
 SUPERVISOR_DELAY="${SUPERVISOR_DELAY:-10}"
+export PORT
 
 for var in PORT SUPERVISOR_DELAY; do
   value="${!var}"
