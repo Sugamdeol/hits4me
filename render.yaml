@@ -1,8 +1,9 @@
-# Updates the existing 9hits-viewer Render service: the 9Hits viewer plus the
-# /health endpoint.
-# Do not rename this service — a different Blueprint name would create a
-# second deployment instead of updating
-# https://dashboard.render.com/web/srv-da09a7dbedkc73a829cg
+# Render Blueprint - deploys the 9Hits viewer + /health endpoint as one web
+# service. Use it via: Render Dashboard -> New -> Blueprint -> connect this
+# repo. ACCESS_KEY is prompted as a secret during the deploy.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
 services:
   - type: web
     name: 9hits-viewer
@@ -11,41 +12,18 @@ services:
     plan: free
     healthCheckPath: /health
     envVars:
-      # 9Hits access key (hard-coded, also baked into the Dockerfile).
+      # Prompted as a secret when the blueprint is applied.
+      # Get it at https://panel.9hits.com/user/profile
       - key: ACCESS_KEY
         value: "23f9097a8d823267188c49b3cc0598b1"
 
-      - key: PORT
-        value: "10000"
-
-      # --- 9Hits viewer in 512 MB -------------------------------------------
-      # LOW_MEMORY=balanced is the safe default here. LOW_MEMORY=extreme adds
-      # --single-process --in-process-gpu, which Chromium labels unsupported
-      # and which dies within seconds on Render's free 512 MB plan (run pass
-      # exits with code 133 = SIGTRAP), producing a crash loop.
-      #   * NH_MAX_MEMORY_MB=400 restarts the viewer if it runs away.
-      #   * INIT_TIMEOUT=600 gives the 9Hits config init pass enough time on
-      #     Render's throttled 0.1 vCPU (300s produced code 124 timeouts).
-      - key: NINEHITS_ENABLED
-        value: "yes"
-      - key: LOW_MEMORY
-        value: "balanced"       # balanced | extreme | auto | off
-                                # extreme (--single-process) crashes with code
-                                # 133 on Render free 512 MB - do not use here
-      - key: INIT_TIMEOUT
-        value: "600"            # 9Hits init pass budget (0.1 vCPU is slow)
-      - key: NH_SP
-        value: "no"             # single-process for 9Hits (unstable on Render)
-      - key: NH_MAX_MEMORY_MB
-        value: "400"            # restart the viewer if its tree exceeds 400 MB
+      # ---- viewer configuration (see README.md) ----
       - key: CLEAR_ALL_SESSIONS
         value: "yes"
       - key: SYSTEM_SESSION
-        value: "yes"
+        value: "no"
       - key: SESSION_NOTE
-        value: "render-system"
-      - key: NOTE
-        value: "render"
+        value: "my-proxies"
       - key: HIDE_BROWSER
         value: "yes"
       - key: ALLOW_POPUPS
@@ -58,5 +36,29 @@ services:
         value: "0"
       - key: RESET_INTERVAL
         value: "2h"
+      - key: NOTE
+        value: "render"
+
+      # Option A: Static proxy list (5-6 sessions recommended for 512 MB free tier)
+      # - key: BULK_ADD_PROXY_TYPE
+      #   value: "socks5"
+      # - key: BULK_ADD_PROXY_LIST
+      #   value: "1.2.3.4:1080;user;pass|1.2.3.5:1080;user;pass|1.2.3.6:1080;user;pass|1.2.3.7:1080;user;pass|1.2.3.8:1080;user;pass"
+
+      # Option A+: Fetch proxy list on boot (e.g. Webshare download link)
+      # - key: BULK_ADD_PROXY_LIST_URL
+      #   value: "https://proxy.webshare.io/api/v2/proxy/list/download/TOKEN/-/any/username/direct/-/"
+
+      # Option B: External proxy pool (configured at https://dash.9hits.com/pool)
+      # - key: EX_PROXY_SESSIONS
+      #   value: "5"
+      # - key: EX_PROXY_URL
+      #   value: "https://dash.9hits.com/pool/YOUR_POOL_KEY"
+
+      # ---- container knobs ----
       - key: SUPERVISOR_DELAY
         value: "10"
+      # Render sets PORT automatically (default 10000); override only if you
+      # change the service port in the dashboard.
+      - key: PORT
+        value: "10000"

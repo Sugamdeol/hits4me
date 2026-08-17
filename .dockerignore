@@ -6,6 +6,3 @@
 *.md
 docker-compose.yml
 render.yaml
-# Local logs - never bake into the image; they are created at runtime.
-logs/
-/logs

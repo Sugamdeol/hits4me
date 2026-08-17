@@ -1,26 +1,16 @@
-# The 9Hits deployment. Runs the 9Hits viewer + the /health endpoint.
-#
-#   docker compose up -d viewer
-#   curl http://localhost:10000/health
-#
-# The 9Hits access key is baked into the image (see Dockerfile), so no .env
-# file is required - override ACCESS_KEY here only if you use another account.
+# Local testing (same image Render builds):
+#   1. copy .env.example to .env and set ACCESS_KEY
+#   2. docker compose up --build
+#   3. curl http://localhost:10000/health
 services:
-  viewer:
+  9hits:
     build: .
     shm_size: 2g
     ports:
       - "10000:10000"
     environment:
       PORT: "10000"
-      NINEHITS_ENABLED: "${NINEHITS_ENABLED:-yes}"
-      # Memory tuning (see README): the LOW_MEMORY flags keep Chromium small.
-      LOW_MEMORY: "${LOW_MEMORY:-auto}"
-      NH_SP: "${NH_SP:-yes}"
-      CREATE_SWAP: "${CREATE_SWAP:-}"
-      NH_RUN_EXTRA_ARGS: "${NH_RUN_EXTRA_ARGS:-}"
-      # 9Hits access key baked in by default - no manual env needed.
-      ACCESS_KEY: "${ACCESS_KEY:-23f9097a8d823267188c49b3cc0598b1}"
+      ACCESS_KEY: "${ACCESS_KEY:-}"
       CLEAR_ALL_SESSIONS: "${CLEAR_ALL_SESSIONS:-yes}"
       SYSTEM_SESSION: "${SYSTEM_SESSION:-no}"
       SESSION_NOTE: "${SESSION_NOTE:-my-proxies}"
@@ -36,19 +26,5 @@ services:
       CACHE_LIMIT: "${CACHE_LIMIT:-0}"
       RESET_INTERVAL: "${RESET_INTERVAL:-2h}"
       NOTE: "${NOTE:-local}"
-      SUPERVISOR_DELAY: "${SUPERVISOR_DELAY:-10}"
-    tmpfs:
-      - /tmp:size=512m,mode=1777
-    volumes:
-      # Per-service logs (logs/9hits.log, logs/health.log, logs/supervisor.log).
-      # Bind-mounting /logs onto the host keeps them across `docker compose up`
-      # / image rebuilds and lets the operator inspect the viewer's log without
-      # entering the container. A named volume is fine too; the entrypoint
-      # creates the directory if it is missing.
-      - ./logs:/logs
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+      SUPERVISOR_DELAY: "10"
     restart: unless-stopped

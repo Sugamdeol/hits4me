@@ -1,204 +1,193 @@
-# hits4me — 9Hits Viewer v6
+---
+title: 9Hits Viewer v6
+emoji: 🌐
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+sdk_version: 4.44.0
+app_file: app.py
+pinned: false
+---
 
-Run the **9Hits Viewer v6** ([9hitste/appv6](https://hub.docker.com/r/9hitste/appv6)) as a
-lightweight container with an integrated **`/health` endpoint** and a small
-**web dashboard**, suitable for free Docker hosts (Render free, Oracle Cloud
-Always Free, any VPS).
+# hits4me
 
-The 9Hits **access key is hard-coded in the image env** (`ACCESS_KEY` in the
-`Dockerfile`, mirrored in `docker-compose.yml` and `render.yaml`), so a bare
-`docker compose up -d` or a Render blueprint deploy needs **no manual
-environment variables at all**.
+Run the **9Hits Viewer v6** ([9hitste/appv6](https://hub.docker.com/r/9hitste/appv6)) on
+**100% Free Cloud Hosting Platforms** (**Hugging Face Spaces, Koyeb, Render, Oracle Cloud Always Free, Fly.io, Railway, Zeabur**) as a lightweight service with an integrated **`/health` endpoint** for uptime monitoring.
 
 ---
 
-## Quick start
+## Free Multi-Platform Strategy: Free System Sessions on Clean Cloud IPs
 
+Rather than relying on shared free proxy lists (which frequently encounter `Auth: Duplicate USER on IP` errors from other 9Hits members), the most reliable method is to run **one system session on each free cloud hosting platform**.
+
+Each provider assigns an isolated, clean datacenter outbound IP address:
+
+| Platform | Free Tier Type | Resources | Outbound Region / IP | Deployment Method |
+| :--- | :--- | :--- | :--- | :--- |
+| **Hugging Face Spaces** | **100% Free (Gradio SDK)** | **16 GB RAM**, 2 vCPU | US / EU (AWS) | Free Gradio Space (`app.py`) |
+| **Koyeb** | **100% Free (Nano Service)** | 512 MB RAM, 0.1 vCPU | Frankfurt, Washington D.C., Singapore | Docker (`koyeb.yaml`) |
+| **Render** | **100% Free (Web Service)** | 512 MB RAM, 750 hrs/mo | Oregon, Ohio, Frankfurt, Singapore | Docker (`render.yaml`) |
+| **Oracle Cloud Always Free** | **100% Forever Free** | **24 GB RAM**, 4 ARM cores | Your chosen home region | `docker compose up -d` |
+| **Fly.io** | Free Allowance | Up to 3 shared VMs (256 MB) | 30+ Global Regions | `fly.toml` |
+| **Zeabur / Railway** | Free Trial / Starter credits | 512 MB RAM | Global Edge | `zeabur.json` / `railway.json` |
+
+---
+
+## Deployment Guides for 100% Free Platforms
+
+### 1. Hugging Face Spaces (100% FREE — Gradio SDK, 16 GB RAM)
+> 💡 *Note: Docker Spaces require a paid subscription on HF, but **Gradio Spaces are 100% Free** with 16 GB RAM! This repo includes `app.py` to run seamlessly on the free Gradio SDK.*
+
+1. Go to [huggingface.co/spaces](https://huggingface.co/spaces) → **Create new Space**.
+2. Space Name: `hits4me-viewer` (or any name).
+3. Select **Gradio** SDK (leave hardware as **Free 2 vCPU · 16 GB RAM**).
+4. Connect or duplicate this repository.
+5. In **Settings** → **Variables and secrets**, add:
+   - Secret `ACCESS_KEY`: `<your-9hits-access-key>`
+   - Variable `SYSTEM_SESSION`: `yes`
+   - Variable `CLEAR_ALL_SESSIONS`: `yes`
+   - Variable `SESSION_NOTE`: `hf-system`
+   - Variable `NOTE`: `huggingface`
+   - Variable `RESET_INTERVAL`: `2h`
+6. The Space will build and launch a live status dashboard while running the 9Hits Viewer.
+
+---
+
+### 2. Koyeb (100% Free Docker Nano Instance)
+1. Go to [app.koyeb.com](https://app.koyeb.com/) → **Create App**.
+2. Select **GitHub** → select `hits4me`.
+3. Choose **Dockerfile** deployment and the **Free (Nano)** instance type.
+4. Set Environment Variables:
+   - `ACCESS_KEY`: `<your-9hits-access-key>`
+   - `SYSTEM_SESSION`: `yes`
+   - `CLEAR_ALL_SESSIONS`: `yes`
+   - `SESSION_NOTE`: `koyeb-system`
+   - `NOTE`: `koyeb`
+   - `RESET_INTERVAL`: `2h`
+   - `PORT`: `10000`
+5. Health Check: Path `/health`, Port `10000`. Click **Deploy**.
+
+---
+
+### 3. Render (100% Free Docker Web Service)
+1. In [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** (connect this repo).
+2. Or create **New → Web Service** → Docker runtime → Free tier.
+3. Paste `ACCESS_KEY` when prompted.
+4. Set Environment Variables:
+   ```env
+   ACCESS_KEY=<your-key>
+   SYSTEM_SESSION=yes
+   CLEAR_ALL_SESSIONS=yes
+   SESSION_NOTE=render-system
+   NOTE=render-oregon
+   RESET_INTERVAL=2h
+   ```
+5. *(Optional)* Deploy another free service in a different region (e.g. Frankfurt or Ohio) to get an extra unique IP address.
+
+---
+
+### 4. Oracle Cloud Always Free (24 GB RAM / 4 CPUs Forever Free)
+Oracle Cloud provides the most generous free tier in the cloud industry (4 ARM vCPUs + 24 GB RAM, plus 2 x86 AMD instances):
 ```bash
-docker compose up -d viewer
-curl http://localhost:10000/health
-open http://localhost:10000/          # dashboard
-```
+git clone https://github.com/Sugamdeol/hits4me.git && cd hits4me
+cp .env.example .env
 
-Override anything by copying `.env.example` to `.env` first (optional).
+# Edit .env and set ACCESS_KEY and SYSTEM_SESSION=yes
+nano .env
 
-### Render (free Docker web service)
-
-Deploy this repo as a Blueprint — `render.yaml` defines the `9hits-viewer`
-web service with the access key, `LOW_MEMORY=balanced`, `NH_MAX_MEMORY_MB=400`
-and `healthCheckPath: /health` already set.
-
----
-
-## How it works
-
-| File | Role |
-| :--- | :--- |
-| `Dockerfile` | Builds on `9hitste/appv6`, extracts the v6 viewer to `/opt/9hits` **at build time** (no 145 MB bzip2 stall at boot), bakes in `ACCESS_KEY`. |
-| `supervisor.py` | Container PID 1. Owns one long-lived child per slot (`ninehits`, `health`), restarts each independently with exponential backoff, per-slot logs + rotation, optional RSS caps. |
-| `start.sh` | 9Hits slot launcher: Xvfb `:99`, `nhviewer <flags> --exit-on-init` (init pass), then `nhviewer --auto-start --in-loop --render-to-terminal` (run pass) under a pseudo-TTY with a wedge watchdog. |
-| `run_pty.py` | Pseudo-TTY wrapper (the v6 viewer refuses to run without a TTY) + wedge/heartbeat detection. |
-| `health_server.py` | `/health` JSON, dashboard GUI, `/logs/<slot>`, `/slots`, `/control/<slot>/<action>`. |
-| `fetch_proxy_list.py` | Downloads `BULK_ADD_PROXY_LIST_URL` at boot and converts it to the viewer's list format. |
-| `webshare_to_9hits.py` | Helper to convert a Webshare export into `BULK_ADD_PROXY_LIST`. |
-
-Process tree:
-
-```
-supervisor.py (PID 1)
-├── start.sh ninehits-only ── Xvfb :99 ── run_pty.py ── nhviewer (Chromium)
-└── health_server.py  (0.0.0.0:$PORT)
+docker compose up -d
 ```
 
 ---
 
-## Dashboard & health endpoint
+### 5. Fly.io
+1. Install `flyctl`: `curl -L https://fly.io/install.sh | sh`
+2. Run `fly launch` in this directory (uses `fly.toml`).
+3. Set your secret: `fly secrets set ACCESS_KEY="<your-access-key>"`.
+4. Deploy: `fly deploy`.
 
-* `GET /` — dashboard (memory bars, viewer status, per-slot Start/Stop/Restart, log tail; polls `/health` every 2 s)
-* `GET /health` (`/healthz`, `/ping`) — JSON status
-* `GET /logs/ninehits` | `/logs/health` | `/logs/supervisor` — last 4 KB of a log
-* `GET /slots` — raw supervisor snapshot
-* `POST /control/ninehits/restart` — queue a slot action (`start` / `stop` / `restart`)
+---
+
+## Proxy Setup (Running Multiple Sessions on 1 Machine)
+
+> ⚠️ **IMPORTANT: The 9Hits public proxy pool is CLOSED.**
+> Do not use `EX_PROXY_SESSIONS` without your own custom pool or proxy list.
+
+If you have dedicated or private proxies:
+
+* **Option A — Static Bulk Proxy List (`BULK_ADD_PROXY_LIST`)**
+  ```env
+  BULK_ADD_PROXY_TYPE=socks5
+  BULK_ADD_PROXY_LIST=1.2.3.4:1080;user;pass|1.2.3.5:1080;user;pass|1.2.3.6:1080;user;pass
+  ```
+
+* **Option A+ — Webshare Dynamic Download Link (`BULK_ADD_PROXY_LIST_URL`)**
+  ```env
+  BULK_ADD_PROXY_LIST_URL=https://proxy.webshare.io/api/v2/proxy/list/download/TOKEN/-/any/username/direct/-/
+  ```
+
+* **Option B — Custom Pool (`EX_PROXY_URL`)**
+  Configure at [dash.9hits.com/pool](https://dash.9hits.com/pool):
+  ```env
+  EX_PROXY_SESSIONS=5
+  EX_PROXY_URL=https://dash.9hits.com/pool/YOUR_POOL_KEY
+  ```
+
+---
+
+## Environment Variables Reference
+
+| Env var | `/nh.sh` flag | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `ACCESS_KEY` | `--access-key` | *required* | From [panel.9hits.com/user/profile](https://panel.9hits.com/user/profile) |
+| `SYSTEM_SESSION` | `--system-session` | `no` | `yes`/`no` — runs direct session on instance IP |
+| `CLEAR_ALL_SESSIONS` | `--clear-all-sessions` | `yes` | Wipes stale sessions on boot |
+| `BULK_ADD_PROXY_LIST_URL` | — | *none* | URL to download proxy list on boot |
+| `BULK_ADD_PROXY_LIST` | `--bulk-add-proxy-list` | *none* | Pipe-delimited proxy list (`ip:port;user;pass\|...`) |
+| `BULK_ADD_PROXY_TYPE` | `--bulk-add-proxy-type` | `socks5` | `socks5`, `http`, `socks4`, `ssh` |
+| `EX_PROXY_SESSIONS` | `--ex-proxy-sessions` | *none* | Number of pool sessions (requires `EX_PROXY_URL`) |
+| `EX_PROXY_URL` | `--ex-proxy-url` | *none* | Pool URL from `dash.9hits.com/pool` |
+| `SESSION_NOTE` | `--session-note` | `my-proxies`| Session label in 9Hits panel |
+| `NOTE` | `--note` | `render` | Machine label in 9Hits panel |
+| `HIDE_BROWSER` | `--hide-browser` | `yes` | Run headless |
+| `ALLOW_POPUPS` | `--allow-popups` | `no` | Popups toggle (keep `no` to save RAM/BW) |
+| `ALLOW_ADULT` | `--allow-adult` | `no` | Adult campaigns toggle |
+| `ALLOW_CRYPTO` | `--allow-crypto` | `no` | Crypto mining campaigns toggle |
+| `CACHE_LIMIT` | `--cache-limit` | `0` | Disk cache limit (`0` disables disk cache) |
+| `RESET_INTERVAL` | `--reset-interval` | `2h` | Periodic viewer reset (`2h`, `6h`, `30m`) |
+| `PORT` | — | `10000` | Port for `/health` endpoint |
+| `SUPERVISOR_DELAY` | — | `10` | Seconds before relaunching exited viewer |
+
+---
+
+## Health Monitoring & Uptime Bots
+
+Every instance exposes a lightweight status endpoint:
+
+```
+GET https://<your-service>/health
+```
 
 ```json
 {
-  "service": "hits4me-9hits-viewer",
-  "version": "4.0.0",
+  "service": "9hits-viewer",
+  "version": "1.0.0",
   "status": "ok",
-  "ninehits": {
-    "status": "running", "running": true, "enabled": true,
-    "pid": 42, "uptime": "20m34s", "uptime_seconds": 1234,
-    "restarts": 0, "memory_mb": 310.2, "child_count": 7,
-    "max_memory_mb": 400, "log_file": "/logs/9hits.log"
-  },
+  "viewer_running": true,
   "supervisor_running": true,
-  "memory_used_mb": 312.4,
-  "memory_limit_mb": 512,
-  "uptime_seconds": 1234
+  "viewer_pid": 42,
+  "restarts": 0,
+  "uptime_seconds": 3600
 }
 ```
 
-`status` is `ok` (viewer running or disabled), `restarting` (viewer down,
-supervisor recovering it) or `error` (supervisor gone → HTTP 503). Everything
-else answers HTTP 200 so uptime bots don't see spurious 5xx during a restart.
-
----
-
-## Memory on 512 MB plans (Render free)
-
-* `LOW_MEMORY=balanced` (default) applies Chromium shrink flags:
-  `--renderer-process-limit=1`, `--enable-low-end-device-mode`,
-  `--memory-model=low`, `--js-flags=--max-old-space-size=64`, caches off,
-  `--disable-gpu`.
-* `LOW_MEMORY=extreme` adds `--single-process --in-process-gpu` (`NH_SP=yes`).
-  This is ~160 MB in a lab but **crashes with exit code 133 on Render free** —
-  the fast-crash detector drops the SP flags automatically on the next launch.
-* `NH_MAX_MEMORY_MB=400` makes the supervisor gracefully restart the viewer
-  before the platform OOM-kills the container.
-* `INIT_TIMEOUT=600` — the config init pass is slow on 0.1 vCPU (300 s timed
-  out with code 124).
-* Run 5–6 sessions max on 512 MB; 9Hits officially recommends ≥ 2 GB.
-
----
-
-## Proxies
-
-```bash
-# Option A: static list
-BULK_ADD_PROXY_TYPE=socks5
-BULK_ADD_PROXY_LIST='1.2.3.4:1080;user;pass|1.2.3.5:1080;user;pass'
-
-# Option A+: download the list at boot (e.g. Webshare)
-BULK_ADD_PROXY_LIST_URL=https://proxy.webshare.io/api/v2/proxy/list/download/TOKEN/-/any/username/direct/-/
-
-# Option B: your own 9Hits pool (https://dash.9hits.com/pool)
-EX_PROXY_SESSIONS=5
-EX_PROXY_URL=https://dash.9hits.com/pool/YOUR_POOL_KEY
-```
-
-The public 9Hits pool is closed — `EX_PROXY_SESSIONS` without `EX_PROXY_URL`
-or a bulk list logs a warning and every session fails with
-`Pool error: The public pool is closed!`.
-
-Alternatively run a single direct session on the host's clean cloud IP with
-`SYSTEM_SESSION=yes`.
-
----
-
-## Environment variables
-
-Viewer config flags are applied by the **init pass**
-(`nhviewer <flags> --exit-on-init`); the **run pass** then starts with
-`--auto-start --in-loop --render-to-terminal [--reset-interval=...]` — the
-same flow as the [official 9Hits v6 installer](https://github.com/9hitste/install).
-
-### Viewer
-
-| Env var | `nhviewer` flag | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ACCESS_KEY` | `--access-key` | *baked in* | From [panel.9hits.com/user/profile](https://panel.9hits.com/user/profile) |
-| `NINEHITS_ENABLED` | — | `yes` | Run the viewer at all (`no` = `/health` only) |
-| `SYSTEM_SESSION` | `--system-session` | `no` | Direct session on the instance IP |
-| `CLEAR_ALL_SESSIONS` | `--clear-all-sessions` | `yes` | Wipe stale sessions on boot |
-| `BULK_ADD_PROXY_LIST` | `--bulk-add-proxy-list` | *none* | Pipe-delimited proxy list |
-| `BULK_ADD_PROXY_TYPE` | `--bulk-add-proxy-type` | `socks5` | `socks5`, `http`, `socks4`, `ssh` |
-| `BULK_ADD_PROXY_LIST_URL` | — | *none* | Download the proxy list at boot |
-| `EX_PROXY_SESSIONS` | `--ex-proxy-sessions` | *none* | Pool session count (needs `EX_PROXY_URL`) |
-| `EX_PROXY_URL` | `--ex-proxy-url` | *none* | Pool URL from `dash.9hits.com/pool` |
-| `SESSION_NOTE` | `--session-note` | `my-proxies` | Session label in the panel |
-| `NOTE` | `--note` | *none* | Machine label in the panel |
-| `HIDE_BROWSER` | `--hide-browser` | `yes` | Headless |
-| `ALLOW_POPUPS` / `ALLOW_ADULT` / `ALLOW_CRYPTO` | `--allow-*` | `no` | Campaign toggles |
-| `CACHE_LIMIT` | `--cache-limit` | `0` | Disk cache bytes (`0` = none; unset = 200 MB) |
-| `HIDE_COLUMNS` | `--hide-columns` | *none* | e.g. `quality,points` |
-| `RESET_INTERVAL` | `--reset-interval` (run pass) | `2h` | Graceful self-restart interval |
-| `EXTRA_ARGS` | — | *none* | Raw flags appended to the init pass |
-| `NH_RUN_EXTRA_ARGS` | — | *none* | Raw flags appended to the run pass |
-
-### Runtime / memory
-
-| Env var | Default | Description |
-| :--- | :--- | :--- |
-| `PORT` | `10000` | Port for `/health` + dashboard |
-| `LOW_MEMORY` | `balanced` | `auto` / `off` / `balanced` / `extreme` |
-| `NH_SP` | `yes` | Single-process Chromium in `extreme` mode (auto-dropped after fast crashes) |
-| `CREATE_SWAP` | *none* | Best-effort swap size, e.g. `256M` |
-| `NH_DIR` | `/opt/9hits` | Where the viewer was extracted at build time |
-| `DEFAULT_DL` | *none* | Download a different viewer build at container start |
-| `NH_DISPLAY` | `:99` | Xvfb display |
-| `NH_RESOLUTION` | `auto` | Xvfb resolution, e.g. `1920x1080x24` |
-| `INIT_TIMEOUT` | `600` | Max seconds for one init pass |
-| `NH_WATCHDOG` / `NH_WATCHDOG_STUCK` | `yes` / `600` | Restart a wedged viewer (no output **and** no CPU) |
-| `NH_RENDER_TO_TERMINAL` | `yes` | `no` disables the live viewer dashboard in the logs |
-| `PTY_COLS` / `PTY_ROWS` | `120` / `30` | Terminal size handed to the viewer |
-| `VNC` / `VNC_PW` / `VNC_PORT` / `NO_VNC_PW` | off / — / `5901` / off | Optional x11vnc mirror of the display |
-
-### Supervisor
-
-| Env var | Default | Description |
-| :--- | :--- | :--- |
-| `SUPERVISOR_DELAY` | `10` | Base restart cooldown (s) |
-| `SUPERVISOR_MAX_DELAY` | `120` | Exponential backoff ceiling (s) |
-| `SUPERVISOR_PARK_AFTER` / `SUPERVISOR_PARK_SECS` | `10` / `300` | Park a crash-looping slot, then retry |
-| `SUPERVISOR_TICK` | `0.5` | Main loop tick (s) |
-| `NINEHITS_CHECK_INTERVAL` | `30` | Seconds between expensive per-slot checks |
-| `NH_MAX_MEMORY_MB` / `NINEHITS_MAX_MEMORY_MB` | `0` | Restart the viewer when its process tree exceeds this (MB) |
-| `NH_MAX_CHILDREN` / `NINEHITS_MAX_CHILDREN` | `0` | Fork-bomb guard |
-| `NH_CPU_SHARES` / `NH_MEM_LIMIT_MB` | *none* | cgroup v1 CPU weight / legacy memory-cap alias |
-| `LOG_DIR` | `/logs` | `9hits.log`, `health.log`, `supervisor.log` |
-| `SLOT_LOG_MAX_BYTES` / `SLOT_LOG_BACKUPS` | `10485760` / `2` | Per-slot log rotation |
-| `SUPERVISOR_DISABLED` | off | Re-exec the legacy `/start.sh` layout instead of the Python supervisor |
+Point any free uptime monitor (**UptimeRobot, Better Stack, Cron-job.org, Kuma**) to ping `https://<your-app>/health` every **5 to 10 minutes** to keep free-tier instances active and prevent sleep timeouts.
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Fix |
-| :--- | :--- |
-| `User not found!` in the log | `ACCESS_KEY` is wrong/empty |
-| `Pool error: The public pool is closed!` | Configure your own pool (`EX_PROXY_URL`) or use a proxy list |
-| Init pass exits with code `124` | Raise `INIT_TIMEOUT` (throttled CPU) |
-| Run pass dies within seconds with code `133` | Single-process Chromium is unsupported on that host — keep `LOW_MEMORY=balanced` / `NH_SP=no` |
-| Container OOM-killed | Lower the session count, set `NH_MAX_MEMORY_MB=400`, use a bigger plan |
-| Viewer silent and idle | The wedge watchdog restarts it after `NH_WATCHDOG_STUCK` seconds |
-| Nothing on `/` | Check `logs/supervisor.log` and `logs/health.log` |
+* **`Auth: Duplicate USER on IP [x.x.x.x]`** — Another 9Hits user is already using that public/shared proxy IP. Switch to a system session on a dedicated cloud provider, refresh your Webshare list, or use private proxies.
+* **`Auth: Duplicate SESSION on IP [x.x.x.x]`** — Multiple sessions from your account on the same IP. Ensure `SYSTEM_SESSION=no` when using proxies, or enable `CLEAR_ALL_SESSIONS=yes` to clear lingering connections.
+* **`Pool error: The public pool is closed!`** — Set `EX_PROXY_SESSIONS=0` (or unset it) and use `BULK_ADD_PROXY_LIST` / `BULK_ADD_PROXY_LIST_URL`, or provide your own custom pool via `EX_PROXY_URL`.
+* **`User not found!`** — `ACCESS_KEY` is incorrect or missing.
