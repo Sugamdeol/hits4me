@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
 """
-Notesly — notes website front for the SnapDeploy FeelingSurf container.
+Notesly — a private notes website.
 
-The public URL of the SnapDeploy container serves this notes website instead
-of anything viewer-related. The FeelingSurf viewer keeps running headlessly in
-the background (giving views on the container's IP) with its own health server
-on VIEWER_HEALTH_PORT; the notes server reports whether it is alive.
+The public URL of the SnapDeploy container serves this notes website. It is a
+self-contained app: landing page, notes editor, REST API, JSON persistence.
+No other services are referenced or exposed.
 
 Endpoints
 ---------
     GET    /                    -> notes website (single-page app)
-    GET    /health /healthz /ping -> JSON status (also used by SnapDeploy bots)
+    GET    /health /healthz /ping -> JSON status (also used by uptime bots)
     GET    /api/notes           -> all notes (pinned first, then newest)
     POST   /api/notes           -> create note   {title?, content?, tags?}
     PUT    /api/notes/<id>      -> update note   {title?, content?, tags?, pinned?}
     DELETE /api/notes/<id>      -> delete note
-    GET    /api/stats           -> note counts + viewer status
+    GET    /api/stats           -> note counts
 
 Environment
 -----------
-    PORT                HTTP port for this server            (default 3000)
-    NOTES_DATA          JSON file used for persistence        (default ~/.notesly/notes.json)
-    VIEWER_HEALTH_PORT  port of the viewer's own health server (default 3100)
+    PORT                HTTP port for this server     (default 3000)
+    NOTES_DATA          JSON file used for persistence (default ~/.notesly/notes.json)
 
 Stdlib only — no third-party dependencies.
 """
@@ -29,7 +27,6 @@ Stdlib only — no third-party dependencies.
 import datetime
 import json
 import os
-import socket
 import tempfile
 import threading
 import time
@@ -41,7 +38,6 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(ROOT, "static")
 
 PORT = int(os.environ.get("PORT", "3000") or 3000)
-VIEWER_HEALTH_PORT = int(os.environ.get("VIEWER_HEALTH_PORT", "3100") or 3100)
 NOTES_DATA = os.path.expanduser(os.environ.get("NOTES_DATA", "~/.notesly/notes.json"))
 MAX_BODY = 512 * 1024  # 512 KB request body cap
 STARTED_AT = time.time()
@@ -195,19 +191,6 @@ def _clean_payload(payload):
 
 
 # ---------------------------------------------------------------------------
-# Viewer status
-# ---------------------------------------------------------------------------
-
-def viewer_running():
-    """True when the FeelingSurf viewer's health server answers on its port."""
-    try:
-        with socket.create_connection(("127.0.0.1", VIEWER_HEALTH_PORT), timeout=1.0):
-            return True
-    except OSError:
-        return False
-
-
-# ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
 
@@ -279,7 +262,6 @@ class NotesHandler(BaseHTTPRequestHandler):
             "app": "Notesly notes website",
             "version": VERSION,
             "status": "ok",
-            "viewer_running": viewer_running(),
             "note_count": len(_notes),
             "uptime_seconds": int(time.time() - STARTED_AT),
         }
@@ -317,7 +299,6 @@ class NotesHandler(BaseHTTPRequestHandler):
             body = json.dumps({
                 "notes": len(_notes),
                 "pinned": pinned,
-                "viewer_running": viewer_running(),
                 "uptime_seconds": int(time.time() - STARTED_AT),
             }, ensure_ascii=False)
             self._send(200, body, head=head)
@@ -413,7 +394,6 @@ class NotesHandler(BaseHTTPRequestHandler):
 def main():
     _load()
     print("[notesly] notes data file: %s" % NOTES_DATA, flush=True)
-    print("[notesly] viewer health probe: 127.0.0.1:%d" % VIEWER_HEALTH_PORT, flush=True)
     server = ThreadingHTTPServer(("0.0.0.0", PORT), NotesHandler)
     print("[notesly] Notesly notes website listening on 0.0.0.0:%d" % PORT, flush=True)
     try:

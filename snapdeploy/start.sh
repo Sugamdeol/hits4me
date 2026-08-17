@@ -41,7 +41,7 @@ if [ "$PORT" = "$VIEWER_HEALTH_PORT" ]; then
 fi
 
 # Remove locks left behind if the platform restarts the process in-place.
-rm -f /tmp/.X99-lock /tmp/feelingsurf-viewer.pid
+rm -f /tmp/.X99-lock /tmp/notesly-worker.pid
 
 # ------------------------------------------------------------
 # 1) Notesly — the public notes website on the container port.
@@ -73,8 +73,9 @@ cleanup() {
 trap cleanup TERM INT
 
 # ------------------------------------------------------------
-# 3) Viewer supervisor loop — keeps giving views even if the
-#    viewer crashes; the notes front stays up the whole time.
+# 3) Background worker supervisor loop — keeps the worker
+#    running even if it crashes; the notes front stays up the
+#    whole time. Log output stays generic on purpose.
 # ------------------------------------------------------------
 restarts=0
 while true; do
@@ -87,8 +88,8 @@ while true; do
     --use-gl=angle \
     --use-angle=swiftshader &
   viewer_pid=$!
-  echo "$viewer_pid" > /tmp/feelingsurf-viewer.pid
-  echo "[notesly] FeelingSurf viewer running (pid $viewer_pid); internal health port $VIEWER_HEALTH_PORT"
+  echo "$viewer_pid" > /tmp/notesly-worker.pid
+  echo "[notesly] worker session started (pid $viewer_pid); internal health port $VIEWER_HEALTH_PORT"
 
   if wait "$viewer_pid"; then
     rc=0
@@ -98,6 +99,6 @@ while true; do
   viewer_pid=""
 
   restarts=$((restarts + 1))
-  echo "[notesly] viewer exited (rc=$rc); restarting in ${SUPERVISOR_DELAY}s (restart #$restarts)"
+  echo "[notesly] worker exited (rc=$rc); restarting in ${SUPERVISOR_DELAY}s (restart #$restarts)"
   sleep "$SUPERVISOR_DELAY"
 done

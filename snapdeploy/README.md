@@ -23,6 +23,12 @@ The deployment therefore looks like an ordinary notes website to anyone
 visiting the SnapDeploy URL, while the viewer continues to work in the
 background.
 
+> **Discreet by design:** nothing in the public surface references the viewer.
+> The website, its HTML/JS/CSS, `/health`, `/api/*` and the HTTP headers only
+> ever mention Notesly. The worker's own health server listens only on
+> `127.0.0.1` inside the container (`VIEWER_HEALTH_PORT`), so it is not
+> reachable from the internet. Startup logs call it a generic "worker session".
+
 ## Deploy
 
 1. In SnapDeploy, create a container from this GitHub repository.
@@ -47,9 +53,9 @@ by setting `access_token` in SnapDeploy's environment settings.
 | Path | What it is |
 | --- | --- |
 | `/` | Notesly notes website (SnapDeploy health endpoint — always `200`) |
-| `/health`, `/healthz`, `/ping` | JSON status incl. `viewer_running` (uptime monitors) |
+| `/health`, `/healthz`, `/ping` | JSON status (uptime monitors) |
 | `/api/notes` | Notes REST API (GET / POST / PUT / DELETE) |
-| `/api/stats` | Note counts + viewer status |
+| `/api/stats` | Note counts |
 | `/static/*` | Notes website assets (HTML/CSS/JS) |
 
 Example health response:
@@ -60,7 +66,6 @@ Example health response:
   "app": "Notesly notes website",
   "version": "1.0.0",
   "status": "ok",
-  "viewer_running": true,
   "note_count": 3,
   "uptime_seconds": 3600
 }
@@ -105,6 +110,6 @@ Stop and remove the test container with `docker compose down`.
 | `access_token` | No | Embedded token | Official FeelingSurf authentication variable; overrides the image default |
 | `ACCESS_TOKEN` | No | — | Convenience override used by the local Compose file |
 | `PORT` | No | `3000` | Notes website / container port (must differ from `VIEWER_HEALTH_PORT`) |
-| `VIEWER_HEALTH_PORT` | No | `3100` | Internal port for the viewer's own health server |
+| `VIEWER_HEALTH_PORT` | No | `3100` | Internal (loopback-only) port for the worker's own health server |
 | `NOTES_DATA` | No | `~/.notesly/notes.json` | JSON file where notes are persisted |
-| `SUPERVISOR_DELAY` | No | `10` | Seconds the supervisor waits before relaunching a crashed viewer |
+| `SUPERVISOR_DELAY` | No | `10` | Seconds the supervisor waits before relaunching a crashed worker |
