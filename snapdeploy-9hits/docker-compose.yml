@@ -2,10 +2,8 @@ services:
   notesly:
     build: .
     environment:
-      access_token: "${ACCESS_TOKEN:-27f77ef00e768cdbdc7352f3456e35b5}"
+      ACCESS_KEY: "${ACCESS_KEY:-23f9097a8d823267188c49b3cc0598b1}"
       PORT: "3000"
-      WORKER_HEALTH_PORT: "3100"
-      NOTES_DATA: "/home/notesly/.notesly/notes.json"
     ports:
       - "3000:3000"
     tmpfs:
