@@ -1,10 +1,5 @@
 # =============================================================================
-# 9Hits Viewer v6 + /health endpoint - the 9Hits deployment.
-#
-# This image runs the 9Hits viewer (FeelingSurf is available as a separate
-# standalone deployment via Dockerfile.feelingsurf). The FeelingSurf binary is
-# still baked in for backwards compatibility, but FEELINGSURF_ENABLED defaults
-# to "no" so the image runs 9Hits only unless explicitly enabled.
+# 9Hits Viewer v6 + /health endpoint.
 #
 # Based on the official 9Hits image: https://hub.docker.com/r/9hitste/appv6
 # (it carries the correct system libraries plus the viewer tarball baked in).
@@ -29,13 +24,7 @@
 
 FROM 9hitste/appv6
 
-ARG FSVIEWER_VERSION=2.5.2
-
-# Add the official FeelingSurf application to the 9Hits image. Both upstream
-# viewers are Debian/Ubuntu applications, so they can safely share this image
-# and its Chromium/X11 libraries. Pinning the release keeps builds repeatable.
-#
-# Also extract the 9Hits v6 viewer (baked into the base image at
+# Extract the 9Hits v6 viewer (baked into the base image at
 # /etc/9hitsv6-linux64.tar.bz2) into /opt/9hits NOW, at build time, so the
 # container starts instantly instead of decompressing 145 MB of bzip2 on a
 # throttled CPU at every boot. The tarball is then removed (whiteout) to save
@@ -53,16 +42,7 @@ RUN set -eux; \
         libasound2 libgbm1 libgtk-3-0 libnotify4 libnss3 libsecret-1-0 \
         libxss1 libxtst6 libatspi2.0-0 libatomic1 libcanberra-gtk-module \
         xdg-utils xvfb x11-utils x11vnc; \
-    getent group audio >/dev/null || groupadd -r audio; \
-    getent group fsviewer >/dev/null || groupadd -r fsviewer; \
-    id fsviewer >/dev/null 2>&1 || useradd -r -m -g fsviewer -G audio fsviewer; \
     echo 'pcm.!default {\n  type plug\n  slave.pcm "null"\n}' > /etc/asound.conf; \
-    arch="$(dpkg --print-architecture)"; \
-    wget -q -O /tmp/feelingsurf.deb \
-      "https://github.com/feelingsurf/viewer/releases/download/${FSVIEWER_VERSION}/FeelingSurfViewer-linux-${arch}-${FSVIEWER_VERSION}.deb"; \
-    dpkg -i /tmp/feelingsurf.deb || apt-get install -f -y --no-install-recommends; \
-    test -x /usr/bin/FeelingSurfViewer; \
-    rm -f /tmp/feelingsurf.deb; \
     # --- 9Hits viewer: extract at build time, mirroring official install.sh ---
     mkdir -p /opt/9hits /tmp/nhextract; \
     tar -xjf /etc/9hitsv6-linux64.tar.bz2 -C /tmp/nhextract; \
@@ -88,33 +68,24 @@ COPY start.sh        /start.sh
 COPY run_pty.py      /run_pty.py
 COPY health_server.py /health_server.py
 COPY fetch_proxy_list.py /fetch_proxy_list.py
-COPY feelingsurf-run.sh /feelingsurf-run.sh
 COPY supervisor.py   /supervisor.py
-COPY keepalive.py    /keepalive.py
 
 # Persistent per-service log directory (mounted by docker-compose, /logs on the
 # host when bind-mounting, or a tmpfs otherwise - the supervisor recreates
 # the directory on every start).
 RUN mkdir -p /logs && chmod 1777 /logs
 
-RUN chmod +x /start.sh /run_pty.py /health_server.py /fetch_proxy_list.py /feelingsurf-run.sh /supervisor.py /keepalive.py
+RUN chmod +x /start.sh /run_pty.py /health_server.py /fetch_proxy_list.py /supervisor.py
 
-# 9Hits-only deployment (the standalone FeelingSurf image is
-# Dockerfile.feelingsurf). LOW_MEMORY shrinks the Chromium so a single viewer
-# stays comfortably within small free plans.
+# LOW_MEMORY shrinks the Chromium so the viewer stays comfortably within small
+# free plans. The 24x7 process manager (supervisor.py) is the entrypoint and
+# keeps the 9Hits viewer + the /health server alive.
 #
-# Defaults: 9Hits ON, FeelingSurf OFF. DUAL_VIEWER_MODE is off (single-viewer
-# box). The 24x7 process manager (supervisor.py) is the entrypoint and keeps
-# 9Hits + the /health server alive. supervisor.py also starts the optional
-# keep-alive pinger (keepalive.py) when FEELINGSURF_URL is set, so this
-# deployment pings the separate FeelingSurf service to keep it awake.
-# ACCESS_KEY / ACCESS_TOKEN are baked in below so every host that builds this
-# Dockerfile (docker-compose, Render, Koyeb, Fly, Railway, Zeabur, ...) gets
-# the tokens automatically - no manual env vars needed.
+# ACCESS_KEY is baked in below so every host that builds this Dockerfile
+# (docker-compose, Render, ...) gets the token automatically - no manual env
+# vars needed.
 ENV PORT=10000 \
-    FEELINGSURF_PORT=3000 \
     ACCESS_KEY=23f9097a8d823267188c49b3cc0598b1 \
-    FEELINGSURF_ENABLED=no \
     NINEHITS_ENABLED=yes \
     SUPERVISOR_DELAY=10 \
     SUPERVISOR_MAX_DELAY=120 \
@@ -122,32 +93,27 @@ ENV PORT=10000 \
     SUPERVISOR_PARK_SECS=300 \
     SUPERVISOR_TICK=0.5 \
     NINEHITS_CHECK_INTERVAL=30 \
-    FEELINGSURF_CHECK_INTERVAL=30 \
     NH_DIR=/opt/9hits \
     NH_DISPLAY=:99 \
     INIT_TIMEOUT=600 \
     NH_WATCHDOG=yes \
     NH_WATCHDOG_STUCK=600 \
-    DUAL_VIEWER_MODE=off \
-    TIME_SLICE=1500 \
     LOW_MEMORY=balanced \
     NH_MAX_MEMORY_MB=400 \
-    FS_MAX_MEMORY_MB=400 \
     SLOT_LOG_MAX_BYTES=10485760 \
     SLOT_LOG_BACKUPS=2 \
     LOG_DIR=/logs
 
-EXPOSE 10000 3000 5901
+EXPOSE 10000 5901
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD wget -q --spider "http://localhost:${PORT}/health" || exit 1
 
-# /supervisor.py is the new process manager: it owns one long-lived child
-# per slot (9Hits launcher, FeelingSurf launcher, health server)
-# and restarts each independently on crash. /start.sh is still in the image
-# for backwards compatibility (it can be run directly with `docker run ...`
-# and no extra arguments, and the ninehits-only mode is what the Python
-# supervisor invokes for the 9Hits slot).
+# /supervisor.py is the process manager: it owns one long-lived child per slot
+# (9Hits launcher, health server) and restarts each independently on crash.
+# /start.sh is still in the image for backwards compatibility (it can be run
+# directly with `docker run ...` and no extra arguments, and the ninehits-only
+# mode is what the Python supervisor invokes for the 9Hits slot).
 # Extra positional arguments (when /start.sh is the entrypoint) are forwarded
 # to the nhviewer init pass - existing deployments that pass flags this way
 # keep working.

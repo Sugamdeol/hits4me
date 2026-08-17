@@ -1,8 +1,0 @@
-{
-  "$schema": "https://schema.zeabur.app/service.json",
-  "dockerfile": "Dockerfile",
-  "healthCheck": {
-    "path": "/health",
-    "port": 10000
-  }
-}

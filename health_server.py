@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Combined HTTP health endpoint for the 9Hits + FeelingSurf container.
+HTTP health endpoint + dashboard for the 9Hits viewer container.
 Stdlib only, no dependencies.
 
 Routes:
     GET/HEAD /  /gui  /index.html  -> dashboard GUI (HTML, polls /health every 2s)
-    GET/HEAD /health  /healthz /ping -> JSON status (per-viewer + memory)
+    GET/HEAD /health  /healthz /ping -> JSON status (viewer + memory)
     POST/GET  /control/<name>/<action> -> Start/Stop/Restart a managed slot
                                         (writes to /tmp/supervisor_ctl)
     GET       /logs/<name>            -> last ~4 KB of a slot's log file
     GET       /slots                  -> raw supervisor snapshot (debug)
 
-Example /health response (both viewers up):
+Example /health response (viewer up):
     {
-      "service": "hits4me-combined-viewer",
-      "version": "3.3.0",
+      "service": "hits4me-9hits-viewer",
+      "version": "4.0.0",
       "status": "ok",
       "ninehits": {
         "status": "running", "running": true, "enabled": true,
@@ -24,37 +24,20 @@ Example /health response (both viewers up):
         "max_memory_mb": 400, "max_children": 0,
         "check_interval_seconds": 30, "log_file": "/logs/9hits.log"
       },
-      "feelingsurf": {
-        "status": "running", "running": true, "enabled": true,
-        "pid": 17, "uptime": "9m0s", "uptime_seconds": 540,
-        "restarts": 1, "last_exit_code": null, "last_error": null,
-        "memory_mb": 198.6, "child_count": 9,
-        "max_memory_mb": 400, "max_children": 0,
-        "check_interval_seconds": 30, "log_file": "/logs/feelingsurf.log"
-      },
       "supervisor_running": true,
-      "memguard_status": "running", "memguard_pid": 12,
       "health_status": "running", "health_pid": 1,
-      "dual_viewer_mode": "auto",
-      "effective_mode": "concurrent",
-      "active_viewer": "both",
       "memory_used_mb": 312.4,
       "memory_limit_mb": 512,
       "memory_peak_mb": 351.1,
       "ninehits_rss_mb": 110.2,
-      "feelingsurf_rss_mb": 198.6,
-      "memguard_interventions": 0,
       "uptime_seconds": 1234,
       "low_memory": "extreme"
     }
 
 Top-level ``status`` is computed from the per-slot statuses:
-  * "ok"         - every enabled viewer slot is running
-  * "degraded"   - at least one viewer is up, another is down; the
-                   supervisor is in control and will recover it
-  * "restarting" - all enabled viewers are down but the supervisor is up
-                   (very early in the boot, or all of them crashed
-                   simultaneously)
+  * "ok"         - the viewer slot is running (or disabled)
+  * "restarting" - the viewer is down but the supervisor is up (very
+                   early in the boot, or it just crashed)
   * "error"      - the supervisor itself is gone (no slot can recover
                    on its own); HTTP 503
 
@@ -77,7 +60,6 @@ It returns 503 only when the supervisor is gone - that is the case where
 the container truly needs a full restart.
 """
 
-import http.client
 import json
 import os
 import signal
@@ -94,14 +76,9 @@ except ImportError:  # Python < 3.7
 # --------------------------------------------------------------------------- #
 
 PORT = int(os.environ.get("PORT", "10000") or 10000)
-FEELINGSURF_PORT = int(os.environ.get("FEELINGSURF_PORT", "3000") or 3000)
-DUAL_VIEWER_MODE = os.environ.get("DUAL_VIEWER_MODE", "auto")
 LOW_MEMORY = os.environ.get("LOW_MEMORY", "auto")
 
-FEELINGSURF_ENABLED = os.environ.get("FEELINGSURF_ENABLED", "yes").lower() not in (
-    "0", "no", "false", "off"
-)
-NINEHITS_ENABLED = os.environ.get("NINEHITS_ENABLED", "no").lower() not in (
+NINEHITS_ENABLED = os.environ.get("NINEHITS_ENABLED", "yes").lower() not in (
     "0", "no", "false", "off"
 )
 
@@ -114,24 +91,18 @@ RESTART_FILE = os.environ.get("VIEWER_RESTART_FILE", "/tmp/viewer.restarts")
 STATE_FILE = os.environ.get("VIEWER_STATE_FILE", "/tmp/viewer.state")
 HEARTBEAT_FILE = os.environ.get("VIEWER_HEARTBEAT_FILE", "/tmp/viewer.lastoutput")
 XVFB_PID_FILE = "/tmp/xvfb.pid"
-FEELINGSURF_PID_FILE = "/tmp/feelingsurf.pid"
-FEELINGSURF_RESTART_FILE = "/tmp/feelingsurf.restarts"
 
 # Supervisor-managed state (used when the container runs under
-# ``supervisor.py``). When the supervisor is absent (e.g. legacy bash-only
-# mode or HF Gradio native mode) the server falls back to reading the legacy
-# files above and reporting a read-only RSS snapshot.
+# ``supervisor.py``). When the supervisor is absent (legacy bash-only mode)
+# the server falls back to reading the legacy files above and reporting a
+# read-only RSS snapshot.
 SUPERVISOR_STATE_FILE = "/tmp/supervisor_state.json"
 SUPERVISOR_ALIVE_FILE = "/tmp/supervisor.alive"
 SUPERVISOR_CTL_DIR = "/tmp/supervisor_ctl"
 SUPERVISOR_LOG_DIR = os.environ.get("LOG_DIR", "/logs")
 
-MEMGUARD_STATE_FILE = "/tmp/memguard.json"
-MEMGUARD_MODE_FILE = "/tmp/memguard.mode"
-MEMGUARD_PID = int(os.environ.get("MEMGUARD_PID", "0") or 0)
-
 STARTED_AT = time.time()
-VERSION = "3.3.0"
+VERSION = "4.0.0"
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -292,58 +263,12 @@ def native_memory_state():
         "memory_peak_mb": used,
         "hard_threshold_mb": None,
         "ninehits_rss_mb": None,
-        "feelingsurf_rss_mb": None,
-        "active_viewer": "both",
-        "time_slice_seconds": None,
-        "next_flip_in_seconds": None,
-        "interventions": 0,
-        "last_target": None,
     }
 
 
-def memguard_state():
-    try:
-        with open(MEMGUARD_STATE_FILE, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        if isinstance(data, dict):
-            return data
-    except (OSError, ValueError):
-        pass
-    return {}
-
-
 def runtime_memory_state():
-    """Use supervisor data (which mirrors memguard) when available.
-
-    Memguard state files in /tmp are only consulted when memguard is
-    actually running right now (per the supervisor snapshot). Otherwise
-    we fall back to the read-only RSS snapshot to avoid reporting stale
-    numbers from a previous run / disabled mode.
-    """
-    slot_mem = _slot_snapshot("memguard")
-    if slot_mem and slot_mem.get("enabled") and slot_mem.get("status") == "running":
-        data = memguard_state()
-        if data:
-            return data
+    """Read-only RSS snapshot of the container."""
     return native_memory_state()
-
-
-def effective_mode():
-    # Only report a memguard-derived effective mode if memguard is actually
-    # running right now. Without this guard a leftover /tmp/memguard.mode
-    # file from a previous run can mask the real configured DUAL_VIEWER_MODE.
-    slot_mem = _slot_snapshot("memguard")
-    if slot_mem and slot_mem.get("enabled") and slot_mem.get("status") == "running":
-        try:
-            with open(MEMGUARD_MODE_FILE, "r", encoding="utf-8") as fh:
-                mode = fh.read().strip()
-            if mode:
-                return mode
-        except OSError:
-            pass
-    if DUAL_VIEWER_MODE == "off":
-        return "off"
-    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -383,24 +308,6 @@ def _xvfb_running_legacy():
     return _pid_alive(_read_int(XVFB_PID_FILE))
 
 
-def _feelingsurf_running_legacy():
-    if not FEELINGSURF_ENABLED:
-        return None
-    if not _pid_alive(_read_int(FEELINGSURF_PID_FILE)):
-        return False
-    try:
-        connection = http.client.HTTPConnection(
-            "127.0.0.1", FEELINGSURF_PORT, timeout=0.75
-        )
-        connection.request("HEAD", "/")
-        response = connection.getresponse()
-        response.read()
-        connection.close()
-        return response.status < 500
-    except (OSError, http.client.HTTPException):
-        return False
-
-
 # --------------------------------------------------------------------------- #
 # Log serving (for the dashboard "show last log" button)
 # --------------------------------------------------------------------------- #
@@ -408,8 +315,6 @@ def _feelingsurf_running_legacy():
 LOG_TAIL_BYTES = 4 * 1024
 LOG_PATH_FOR_SLOT = {
     "ninehits": os.path.join(SUPERVISOR_LOG_DIR, "9hits.log"),
-    "feelingsurf": os.path.join(SUPERVISOR_LOG_DIR, "feelingsurf.log"),
-    "memguard": os.path.join(SUPERVISOR_LOG_DIR, "memguard.log"),
     "health": os.path.join(SUPERVISOR_LOG_DIR, "health.log"),
     "supervisor": os.path.join(SUPERVISOR_LOG_DIR, "supervisor.log"),
 }
@@ -533,37 +438,16 @@ GUI_HTML = """<!doctype html>
         <div class="bar-lbl"><span>9Hits v6 <span id="nhTag" class="tag">–</span></span><span id="nhMem">– MB</span></div>
         <div class="bar" style="height:9px"><i id="nhFill" style="width:0%"></i></div>
       </div>
-      <div style="margin-top:8px;">
-        <div class="bar-lbl"><span>FeelingSurf <span id="fsTag" class="tag">–</span></span><span id="fsMem">– MB</span></div>
-        <div class="bar" style="height:9px"><i id="fsFill" style="width:0%"></i></div>
-      </div>
     </div>
 
     <div class="card">
-      <h2>Dual-viewer mode</h2>
-      <div class="kv"><span class="k">configured</span><span class="v" id="cfgMode">–</span></div>
-      <div class="kv"><span class="k">effective</span><span class="v" id="effMode">–</span></div>
-      <div class="kv"><span class="k">active viewer</span><span class="v" id="activeViewer">–</span></div>
-      <div class="kv"><span class="k">time slice</span><span class="v" id="timeSlice">–</span></div>
-      <div class="kv"><span class="k">next flip in</span><span class="v" id="nextFlip">–</span></div>
-      <div class="kv"><span class="k">memguard restarts</span><span class="v" id="mgInt">–</span></div>
-      <div class="kv"><span class="k">last target</span><span class="v" id="mgTarget">–</span></div>
-    </div>
-
-    <div class="card">
-      <h2>Viewers (24x7 status)</h2>
+      <h2>Viewer (24x7 status)</h2>
       <div class="kv"><span class="k">9Hits enabled</span><span class="v" id="nhEnabled">–</span></div>
       <div class="kv"><span class="k">9Hits status</span><span class="v" id="nhStatus">–</span></div>
       <div class="kv"><span class="k">9Hits running</span><span class="v" id="nhRunningFlag">–</span></div>
       <div class="kv"><span class="k">9Hits pid / uptime / restarts</span><span class="v" id="nhPid">–</span></div>
       <div class="kv"><span class="k">9Hits memory (RSS) / procs</span><span class="v" id="nhMemProcs">–</span></div>
       <div class="kv"><span class="k">9Hits last exit / error</span><span class="v" id="nhErr">–</span></div>
-      <div class="kv"><span class="k">FeelingSurf enabled</span><span class="v" id="fsEnabled">–</span></div>
-      <div class="kv"><span class="k">FeelingSurf status</span><span class="v" id="fsStatus">–</span></div>
-      <div class="kv"><span class="k">FeelingSurf running</span><span class="v" id="fsRunningFlag">–</span></div>
-      <div class="kv"><span class="k">FS pid / uptime / restarts</span><span class="v" id="fsPid">–</span></div>
-      <div class="kv"><span class="k">FS memory (RSS) / procs</span><span class="v" id="fsMemProcs">–</span></div>
-      <div class="kv"><span class="k">FS last exit / error</span><span class="v" id="fsErr">–</span></div>
       <div class="kv"><span class="k">low memory flags</span><span class="v" id="lowMem">–</span></div>
     </div>
 
@@ -574,10 +458,6 @@ GUI_HTML = """<!doctype html>
         <div style="flex:1;min-width:380px;">
           <div class="sub" style="margin-bottom:4px;">9Hits log tail (logs/9hits.log)</div>
           <pre class="logbox" id="nhLog">…</pre>
-        </div>
-        <div style="flex:1;min-width:380px;">
-          <div class="sub" style="margin-bottom:4px;">FeelingSurf log tail (logs/feelingsurf.log)</div>
-          <pre class="logbox" id="fsLog">…</pre>
         </div>
       </div>
     </div>
@@ -623,27 +503,13 @@ async function refresh() {
   $('memBarPct').textContent = (used && limit) ? Math.round(pct) + '% of budget' : '–';
   $('memLimitMax').textContent = fmt(limit) + ' MB';
 
-  const nh = d.ninehits_rss_mb, fs = d.feelingsurf_rss_mb;
+  const nh = d.ninehits_rss_mb;
   const nhPct = nh && limit ? Math.min(100, nh / limit * 100) : 0;
-  const fsPct = fs && limit ? Math.min(100, fs / limit * 100) : 0;
   $('nhFill').style.width = nhPct + '%';
-  $('fsFill').style.width = fsPct + '%';
   $('nhMem').textContent = F(nh) + ' MB';
-  $('fsMem').textContent = F(fs) + ' MB';
   setTag($('nhTag'), d.ninehits_running === true ? 'RUN' : d.ninehits_running === false ? 'down' : d.ninehits_running === 'disabled' ? 'off' : '—');
-  setTag($('fsTag'), d.feelingsurf_running === true ? 'RUN' : d.feelingsurf_running === false ? 'down' : d.feelingsurf_running === 'disabled' ? 'off' : '—');
 
-  // mode
-  $('cfgMode').textContent = fmt(d.dual_viewer_mode);
-  $('effMode').textContent = fmt(d.effective_mode);
-  $('activeViewer').textContent = fmt(d.active_viewer);
-  $('timeSlice').textContent = d.time_slice_seconds ? d.time_slice_seconds + ' s' : '–';
-  const nf = d.next_flip_in_seconds;
-  $('nextFlip').textContent = nf === null || nf === undefined ? '–' : nf + ' s';
-  $('mgInt').textContent = fmt(d.memguard_interventions);
-  $('mgTarget').textContent = fmt(d.memguard_last_target);
-
-  // viewers
+  // viewer
   $('nhEnabled').textContent = fmt(d.viewer_enabled);
   $('nhStatus').textContent = fmt(d.ninehits_status);
   $('nhRunningFlag').textContent = (d.ninehits && d.ninehits.running === true) ? 'YES (pid ' + fmt(d.ninehits.pid) + ')' :
@@ -653,20 +519,10 @@ async function refresh() {
                                  ' / ' + (d.ninehits && d.ninehits.child_count != null ? d.ninehits.child_count + ' procs' : '–') +
                                  (d.ninehits && d.ninehits.max_memory_mb > 0 ? ' (cap ' + d.ninehits.max_memory_mb + ' MB)' : '');
   $('nhErr').textContent = fmt(d.ninehits_last_exit_code) + (d.ninehits_last_error ? ' (' + d.ninehits_last_error + ')' : ' (none)');
-  $('fsEnabled').textContent = fmt(d.feelingsurf_enabled);
-  $('fsStatus').textContent = fmt(d.feelingsurf_status);
-  $('fsRunningFlag').textContent = (d.feelingsurf && d.feelingsurf.running === true) ? 'YES (pid ' + fmt(d.feelingsurf.pid) + ')' :
-                                    (d.feelingsurf_running === 'disabled' ? 'disabled' : 'no');
-  $('fsPid').textContent = fmt(d.feelingsurf_pid) + ' / ' + (d.feelingsurf ? d.feelingsurf.uptime : '-') + ' / ' + fmt(d.feelingsurf_restart_count);
-  $('fsMemProcs').textContent = (d.feelingsurf && d.feelingsurf.memory_mb != null ? d.feelingsurf.memory_mb.toFixed(1) + ' MB' : '–') +
-                                 ' / ' + (d.feelingsurf && d.feelingsurf.child_count != null ? d.feelingsurf.child_count + ' procs' : '–') +
-                                 (d.feelingsurf && d.feelingsurf.max_memory_mb > 0 ? ' (cap ' + d.feelingsurf.max_memory_mb + ' MB)' : '');
-  $('fsErr').textContent = fmt(d.feelingsurf_last_exit_code) + (d.feelingsurf_last_error ? ' (' + d.feelingsurf_last_error + ')' : ' (none)');
   $('lowMem').textContent = fmt(d.low_memory);
 
   // log tails
   $('nhLog').textContent = d.ninehits_log_tail || '(empty)';
-  $('fsLog').textContent = d.feelingsurf_log_tail || '(empty)';
 
   // per-slot controls
   renderSlotButtons(d.slots || {});
@@ -682,7 +538,7 @@ function setTag(el, text) {
 function renderSlotButtons(slots) {
   const root = $('slotButtons');
   root.innerHTML = '';
-  const order = ['ninehits', 'feelingsurf', 'memguard', 'health'];
+  const order = ['ninehits', 'health'];
   for (const name of order) {
     const s = slots[name];
     if (!s) continue;
@@ -753,8 +609,8 @@ def _request_slot_control(name, action):
     sup_state = _supervisor_state()
     slot = (sup_state.get("slots") or {}).get(name)
     if slot is not None and slot.get("enabled") is False and action in ("start", "restart"):
-        return False, "%s is disabled by configuration - set the corresponding NINEHITS_ENABLED / FEELINGSURF_ENABLED env var to enable it" % name
-    if name not in ("ninehits", "feelingsurf", "memguard", "health"):
+        return False, "%s is disabled by configuration - set NINEHITS_ENABLED=yes to enable it" % name
+    if name not in ("ninehits", "health"):
         return False, "unknown slot: %r" % name
     try:
         os.makedirs(SUPERVISOR_CTL_DIR, exist_ok=True)
@@ -784,9 +640,9 @@ def _slot_dict_to_public(name, slot):
             "pid": None,
             "uptime_seconds": 0,
             "restart_count": 0,
+            "crash_streak": 0,
             "status": "disabled" if not (
-                (name == "ninehits" and NINEHITS_ENABLED) or
-                (name == "feelingsurf" and FEELINGSURF_ENABLED)
+                name == "ninehits" and NINEHITS_ENABLED
             ) else "stopped",
             "last_exit_code": None,
             "last_error": None,
@@ -812,7 +668,7 @@ def _slot_dict_to_public(name, slot):
 
 
 def _slot_to_nested(name, slot):
-    """Build the per-viewer nested object the user-facing /health shape
+    """Build the nested viewer object the user-facing /health shape
     documents. Independent of the legacy flat fields (which are kept
     for backward compatibility with old uptime bots).
 
@@ -837,10 +693,7 @@ def _slot_to_nested(name, slot):
         }
     """
     if not slot:
-        enabled = (
-            (name == "ninehits" and NINEHITS_ENABLED)
-            or (name == "feelingsurf" and FEELINGSURF_ENABLED)
-        )
+        enabled = name == "ninehits" and NINEHITS_ENABLED
         return {
             "status": "disabled" if not enabled else "stopped",
             "running": False,
@@ -911,18 +764,6 @@ def _nh_running(slot):
             return False
     # Legacy bash-only fallback
     return _nh_viewer_running_legacy()
-
-
-def _feelingsurf_running(slot):
-    if not FEELINGSURF_ENABLED:
-        return None
-    if slot:
-        st = slot.get("status")
-        if st == "running":
-            return True
-        if st in ("stopped", "crashed", "starting", "stopping"):
-            return False
-    return _feelingsurf_running_legacy()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1005,80 +846,45 @@ class Handler(BaseHTTPRequestHandler):
         sup_state = _supervisor_state()
         slots = (sup_state.get("slots") if isinstance(sup_state, dict) else {}) or {}
         nh_slot = slots.get("ninehits")
-        fs_slot = slots.get("feelingsurf")
-        mg_slot = slots.get("memguard")
         hc_slot = slots.get("health")
 
         # Per-slot running booleans (true / false / None = N/A).
         nh_running = _nh_running(nh_slot)
-        fs_running = _feelingsurf_running(fs_slot)
-        mg_status = (mg_slot or {}).get("status") or "stopped"
         hc_status = (hc_slot or {}).get("status") or "running"
         supervisor_alive = _supervisor_alive()
 
         # Per-slot public view.
         nh_pub = _slot_dict_to_public("ninehits", nh_slot)
-        fs_pub = _slot_dict_to_public("feelingsurf", fs_slot)
 
-        # Top-level status. The new shape supports "degraded" - one
-        # viewer up, the other down - which is more useful for an
-        # uptime monitor than the binary "ok"/"restarting" pair, but
-        # we keep "ok" when everything is up and "error" when the
-        # supervisor is gone, so the previous semantics are preserved.
-        enabled_running = []
-        enabled_configured = []
-        if NINEHITS_ENABLED:
-            enabled_configured.append(True)
-            enabled_running.append(nh_running is True)
-        if FEELINGSURF_ENABLED:
-            enabled_configured.append(True)
-            enabled_running.append(fs_running is True)
-        if not enabled_configured:
-            # No viewers at all -> still ok, container is up.
+        # Top-level status: "ok" when the viewer is up (or disabled),
+        # "restarting" while the supervisor is bringing it back, and
+        # "error" only when the supervisor itself is gone.
+        if not NINEHITS_ENABLED:
             status = "ok"
-        elif all(enabled_running):
+        elif nh_running is True:
             status = "ok"
-        elif supervisor_alive and enabled_running:
-            # At least one viewer is up but at least one is down. The
-            # supervisor will recover it automatically - this is the
-            # "degraded" state.
-            status = "degraded"
         elif supervisor_alive:
-            # Both viewers enabled, neither up yet (very early in the
-            # boot). Same idea as degraded but for the cold-start case.
             status = "restarting"
         else:
             status = "error"
 
-        # Nested per-viewer shape (the documented user-facing one).
+        # Nested viewer shape (the documented user-facing one).
         nh_nested = _slot_to_nested("ninehits", nh_slot)
-        fs_nested = _slot_to_nested("feelingsurf", fs_slot)
 
         mg = runtime_memory_state()
         body = json.dumps(
             {
-                "service": "hits4me-combined-viewer",
+                "service": "hits4me-9hits-viewer",
                 "version": VERSION,
                 "status": status,
-                # Per-viewer nested objects (the documented shape).
+                # Nested viewer object (the documented shape).
                 "ninehits": nh_nested,
-                "feelingsurf": fs_nested,
-                # Top-level per-viewer booleans (kept for back-compat:
-                # true | false | "disabled" | null).
+                # Top-level boolean (kept for back-compat:
+                # true | false | "disabled").
                 "ninehits_running": (
                     "disabled" if not NINEHITS_ENABLED
                     else (True if nh_running is True else False)
                 ),
-                "feelingsurf_running": (
-                    "disabled" if not FEELINGSURF_ENABLED
-                    else (True if fs_running is True else False)
-                ),
-                # Back-compat: the older "feelingsurf" / "ninehits"
-                # top-level booleans. We redefine them as the per-viewer
-                # nested object too (so naive `if d.ninehits` checks
-                # still work because the nested dict is truthy), but a
-                # monitor that just wants a boolean should use
-                # ``ninehits_running`` or the documented shape.
                 "supervisor_running": supervisor_alive,
                 "supervisor_version": (sup_state or {}).get("version") if sup_state else None,
                 # 9Hits (legacy flat fields - older uptime bots).
@@ -1101,46 +907,24 @@ class Handler(BaseHTTPRequestHandler):
                 "ninehits_last_exit_code": nh_pub["last_exit_code"],
                 "ninehits_last_error": nh_pub["last_error"],
                 "ninehits_log_tail": nh_pub["log_tail"],
-                # FeelingSurf (legacy flat fields).
-                "feelingsurf_enabled": FEELINGSURF_ENABLED,
-                "feelingsurf_pid": fs_pub["pid"],
-                "feelingsurf_uptime_seconds": fs_pub["uptime_seconds"],
-                "feelingsurf_restart_count": fs_pub["restart_count"],
-                "feelingsurf_crash_streak": fs_pub["crash_streak"],
-                "feelingsurf_status": fs_pub["status"],
-                "feelingsurf_last_exit_code": fs_pub["last_exit_code"],
-                "feelingsurf_last_error": fs_pub["last_error"],
-                "feelingsurf_log_tail": fs_pub["log_tail"],
-                # memguard / health
-                "memguard_status": mg_status,
-                "memguard_pid": (mg_slot or {}).get("pid"),
-                "memguard_uptime_seconds": (mg_slot or {}).get("uptime_seconds") or 0,
-                "memguard_restart_count": (mg_slot or {}).get("restart_count") or 0,
+                # health
                 "health_status": hc_status,
                 "health_pid": (hc_slot or {}).get("pid") or os.getpid(),
                 # Per-slot full snapshot (used by the dashboard buttons).
                 "slots": slots,
-                # Memory / mode (from memguard or the read-only fallback).
-                "dual_viewer_mode": DUAL_VIEWER_MODE,
-                "effective_mode": effective_mode(),
-                "active_viewer": mg.get("active_viewer"),
-                "time_slice_seconds": mg.get("time_slice_seconds"),
+                # Memory snapshot.
                 "memory_used_mb": mg.get("memory_used_mb"),
                 "memory_limit_mb": mg.get("memory_limit_mb"),
                 "memory_peak_mb": mg.get("memory_peak_mb"),
                 "hard_threshold_mb": mg.get("hard_threshold_mb"),
                 "ninehits_rss_mb": mg.get("ninehits_rss_mb"),
-                "feelingsurf_rss_mb": mg.get("feelingsurf_rss_mb"),
-                "memguard_interventions": mg.get("interventions"),
-                "memguard_last_target": mg.get("last_target"),
-                "next_flip_in_seconds": mg.get("next_flip_in_seconds"),
                 "low_memory": LOW_MEMORY,
                 "uptime_seconds": int(time.time() - STARTED_AT),
             },
             sort_keys=True,
         )
-        # 200 even when degraded (the supervisor is still in control and
-        # will recover). 503 only when the supervisor itself is gone.
+        # 200 even while restarting (the supervisor is still in control
+        # and will recover). 503 only when the supervisor itself is gone.
         code = 200 if status != "error" else 503
         self._send(code, {"Cache-Control": "no-store"},
                    body.encode("utf-8"), "application/json")

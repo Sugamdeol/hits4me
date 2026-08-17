@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Entrypoint for the 9Hits Viewer v6 + FeelingSurf Viewer + /health container.
+# Entrypoint for the 9Hits Viewer v6 + /health container.
 #
-# 9Hits side (we drive the viewer directly - we do NOT call the opaque
-# upstream /nh.sh anymore):
+# We drive the viewer directly - we do NOT call the opaque upstream /nh.sh:
 #
 #   * The viewer (nhviewer) is extracted from the image's baked-in tarball at
 #     BUILD time (see Dockerfile) into /opt/9hits. No multi-minute bzip2
@@ -11,7 +10,7 @@
 #     "Extracting 9hitsv6-linux64 ..." deadlock seen on weak free-tier CPUs).
 #   * Xvfb provides a virtual display (:99 by default) - the v6 viewer needs
 #     an X display even with --hide-browser=yes. Supervised: restarted if it
-#     ever dies. (FeelingSurf uses its own :98.)
+#     ever dies.
 #   * Launch flow mirrors the official 9hits installer (9hitste/install):
 #       1. init pass: `nhviewer <your config flags> --exit-on-init` applies
 #          access key / sessions / limits, then exits (bounded by a timeout);
@@ -21,24 +20,13 @@
 #          zero-CPU) viewer.
 #   * Set DEFAULT_DL to download a different viewer build at container start.
 #
-# 9Hits stays OFF by default (NINEHITS_ENABLED=no) so a bare deploy never
-# surprises anyone. BUT both viewers can now share a 512 MB free instance
-# (e.g. Render free) via three cooperating layers:
+# LOW_MEMORY Chromium flags are auto-applied on < 1 GB boxes
+# (--renderer-process-limit=1, --enable-low-end-device-mode, --memory-model=low,
+# V8 heap caps, caches off, no GPU process, ...) so the viewer fits small free
+# plans; LOW_MEMORY=extreme additionally runs Chromium single-process.
 #
-#   1. LOW_MEMORY Chromium flags auto-applied on < 1 GB boxes
-#      (--renderer-process-limit=1, --enable-low-end-device-mode,
-#      --memory-model=low, V8 heap caps, caches off, no GPU process, ...) -
-#      see NH_MEM_FLAGS / FS_MEM_FLAGS below.
-#   2. memguard.py - a memory guardian that watches total RSS against the
-#      cgroup limit and restarts the HEAVIEST viewer when the pair would
-#      otherwise exceed it, so the platform never OOM-kills the container.
-#   3. DUAL_VIEWER_MODE=time-slice / auto - if the box really cannot fit both
-#      simultaneously, memguard alternates them (TIME_SLICE seconds each) so
-#      only one Chromium is resident at a time (~50% uptime each, but NO OOM).
-#
-# Set NINEHITS_ENABLED=yes + DUAL_VIEWER_MODE=auto (as render.yaml / koyeb.yaml
-# already do) to run BOTH viewers on the free 512 MB plan. On >= 2 GB hosts
-# everything just runs concurrently and the guardian never intervenes.
+# The 9Hits access key is baked into the image (ACCESS_KEY in the Dockerfile),
+# so no manual env vars are required on any host.
 #
 # Health endpoint: GET /health on 0.0.0.0:$PORT (health_server.py).
 # Any extra positional arguments are forwarded to the nhviewer init pass.
@@ -53,9 +41,7 @@ PORT="${PORT:-10000}"
 #
 #   (no args, the legacy default)
 #       start.sh is the container ENTRYPOINT. It starts every supervisor
-#       inline (Xvfb, 9Hits, FeelingSurf, memguard) and execs the health
-#       server in the foreground. This mode is what every deployment
-#       platform sees today; nothing about it has changed.
+#       inline (Xvfb, 9Hits) and execs the health server in the foreground.
 #
 #   ninehits-only
 #       start.sh is the command for the 9Hits slot of the new
@@ -64,8 +50,7 @@ PORT="${PORT:-10000}"
 #       optional VNC) and stays alive as long as the 9Hits supervisor is
 #       alive. When the 9Hits supervisor dies, start.sh exits - the Python
 #       supervisor detects the exit, waits for the cooldown, and restarts
-#       ``start.sh ninehits-only`` from scratch. This is what lets one
-#       viewer's crash NOT take down the other one.
+#       ``start.sh ninehits-only`` from scratch.
 #
 # Detection is intentionally simple: any first arg equal to "ninehits-only".
 # Extra args after the mode word are forwarded to the nhviewer init pass
@@ -125,38 +110,17 @@ detect_mem_limit_mb() {
 MEM_LIMIT_MB=$(detect_mem_limit_mb)
 export MEM_LIMIT_MB
 
-# --------------------------------------------------------- 512MB dual-viewer
-# Knobs that let BOTH 9Hits and FeelingSurf share one small instance without
-# the platform OOM-killing the container:
-#
-#   DUAL_VIEWER_MODE
-#     auto        start both together; escalate to time-slice if RAM proves
-#                 too small (2+ over-limit restarts inside 10 min)
-#     concurrent  always run both; memguard restarts the heaviest viewer when
-#                 total RSS crosses MEMGUARD_HARD_PCT of the limit
-#     time-slice  alternate the viewers every TIME_SLICE seconds (one Chromium
-#                 resident at a time - guaranteed to fit 512 MB, ~50% uptime)
-#     off         legacy: no memguard, no slicing (two viewers may OOM small
-#                 plans - you were warned)
+# ------------------------------------------------------------ memory tuning
 #   LOW_MEMORY
 #     auto        apply Chromium memory-shrinking flags only on < 1 GB boxes
 #     balanced    always apply the balanced flags     off: never
-#     extreme     balanced + --single-process for BOTH viewers (~324 MB for
-#                 the pair - lets both run CONCURRENTLY in 512 MB). Per-viewer
-#                 toggles NH_SP / FS_SP (default yes) + crash auto-fallback:
-#                 if a viewer crash-loops 3x at startup, its SP flags are
-#                 dropped automatically so it keeps running (slower, safer).
-#                 FeelingSurf GL: FS_GL_MODE=swiftshader (upstream default) or
-#                 disable-gpu (only if swiftshader misbehaves under SP).
-#   TIME_SLICE    seconds per viewer turn in time-slice mode (default 1500=25m)
-DUAL_VIEWER_MODE="${DUAL_VIEWER_MODE:-auto}"
-TIME_SLICE="${TIME_SLICE:-1500}"
+#     extreme     balanced + --single-process (NH_SP, default yes) with a crash
+#                 auto-fallback: if the viewer crash-loops 3x at startup the SP
+#                 flags are dropped automatically so it keeps running.
 LOW_MEMORY="${LOW_MEMORY:-auto}"
 CREATE_SWAP="${CREATE_SWAP:-}"     # e.g. "256M"; auto-tried on small boxes
 NH_SP="${NH_SP:-yes}"              # single-process for 9Hits in extreme mode
-FS_SP="${FS_SP:-yes}"              # single-process for FeelingSurf in extreme
-FS_GL_MODE="${FS_GL_MODE:-swiftshader}"   # swiftshader | disable-gpu
-export DUAL_VIEWER_MODE TIME_SLICE LOW_MEMORY CREATE_SWAP NH_SP FS_SP FS_GL_MODE
+export LOW_MEMORY CREATE_SWAP NH_SP
 
 # Decide whether the low-memory Chromium flag set applies.
 LOW_MEM_ON=0
@@ -183,13 +147,10 @@ fi
 #   --memory-model=low             same idea, newer Chromium
 #   --js-flags=--max-old-space-size=64  cap V8 heaps in every renderer
 #   --disk-cache-size/--media-cache-size  keep the browser cache off RAM/disk
-#   --disable-gpu (9Hits only)     drop the separate GPU process (~40-80 MB);
-#                                  FeelingSurf upstream NEEDS swiftshader GL, so
-#                                  it keeps --use-gl=angle --use-angle=swiftshader
+#   --disable-gpu                  drop the separate GPU process (~40-80 MB)
 #   --disable-{extensions,sync,background-networking,component-extensions-...}
 #                                  no extensions/background work in the viewer
 NH_MEM_FLAGS=()
-FS_MEM_FLAGS=()
 if [ "$LOW_MEM_ON" -eq 1 ]; then
   NH_MEM_FLAGS=(
     --disable-gpu --disable-dev-shm-usage --disable-extensions
@@ -200,58 +161,25 @@ if [ "$LOW_MEM_ON" -eq 1 ]; then
     --disk-cache-size=1048576 --media-cache-size=1048576
     --disable-features=Translate,BackForwardCache,MediaRouter,OptimizationHints
   )
-  # Note: --disable-dev-shm-usage --no-sandbox --use-gl=angle
-  # --use-angle=swiftshader are the unconditional upstream base flags and are
-  # already in feelingsurf-run.sh (upstream replaced --disable-gpu with
-  # swiftshader to fix a 2.5.2 startup crash - never add --disable-gpu here
-  # unless FS_GL_MODE=disable-gpu is set explicitly).
-  FS_MEM_FLAGS=(
-    --disable-extensions --disable-background-networking --disable-sync
-    --disable-component-extensions-with-background-pages
-    --renderer-process-limit=1 --enable-low-end-device-mode --memory-model=low
-    --js-flags=--max-old-space-size=64
-    --disk-cache-size=1048576 --media-cache-size=1048576
-    --disable-features=Translate,BackForwardCache,MediaRouter,OptimizationHints
-  )
 fi
 
-# --- LOW_MEMORY=extreme: single-process mode for both viewers ---------------
-# Measured with a real Chromium 149 (2 tabs each, stable 60s+):
-#   both --single-process --disable-gpu              -> ~324 MB total
-#   9Hits single-process + FeelingSurf swiftshader   -> ~458 MB total
-# Both fit Render free's 512 MB, so DUAL_VIEWER_MODE=concurrent finally works.
-# Chromium upstream labels --single-process as unsupported, so per-viewer
-# toggles + the crash auto-fallback below make it safe: a viewer that
+# --- LOW_MEMORY=extreme: single-process mode --------------------------------
+# Measured with a real Chromium 149 (2 tabs, stable 60s+): --single-process
+# --disable-gpu keeps the viewer around ~160 MB, so it fits Render free's
+# 512 MB comfortably. Chromium upstream labels --single-process as
+# unsupported, so the crash auto-fallback below makes it safe: a viewer that
 # crash-loops 3x at startup is relaunched WITHOUT its SP flags.
 NH_EXTREME_FLAGS=()
-FS_EXTREME_FLAGS=()
 if [ "$LOW_MEMORY" = "extreme" ]; then
-  log "LOW_MEMORY=extreme: enabling single-process mode (NH_SP=$NH_SP FS_SP=$FS_SP, FS_GL_MODE=$FS_GL_MODE)"
+  log "LOW_MEMORY=extreme: enabling single-process mode (NH_SP=$NH_SP)"
   if _yes "$NH_SP"; then
     NH_EXTREME_FLAGS+=(--single-process --in-process-gpu)
   fi
-  if _yes "$FS_SP"; then
-    FS_EXTREME_FLAGS+=(--single-process --in-process-gpu)
-  fi
-  case "$FS_GL_MODE" in
-    disable-gpu) log "FS_GL_MODE=disable-gpu: replacing swiftshader with --disable-gpu for FeelingSurf" ;;
-    *) FS_GL_MODE=swiftshader ;;
-  esac
 fi
 
-# FeelingSurf display resolution: 1280x720 on small boxes saves a few MB of
-# Xvfb framebuffer + renderer surface memory (1920x1080 on normal hosts).
-FS_RESOLUTION="${FS_RESOLUTION:-}"
-if [ -z "$FS_RESOLUTION" ]; then
-  if [ "$LOW_MEM_ON" -eq 1 ]; then FS_RESOLUTION=1280x720x24; else FS_RESOLUTION=1920x1080x24; fi
-fi
-export FS_RESOLUTION
-export FS_MEM_FLAGS="${FS_MEM_FLAGS[*]}"
-export FS_EXTRA_FLAGS="${FS_EXTRA_FLAGS:-}"
-
-# Crash-streak tracker: used by both supervisors to auto-drop single-process
-# flags after 3 quick restarts (SP is the risky knob; a viewer that crashes
-# under SP should fall back to the balanced set instead of loop-forever).
+# Crash-streak tracker: used by the 9Hits supervisor to auto-drop the
+# single-process flags after 3 quick restarts (SP is the risky knob; a viewer
+# that crashes under SP falls back to the balanced set instead of looping).
 crash_streak() {
   local file="/tmp/$1.crash" now last start
   now=$(date +%s 2>/dev/null || echo 0)
@@ -290,41 +218,7 @@ elif [ "${MEM_LIMIT_MB:-0}" -gt 0 ] && [ "$MEM_LIMIT_MB" -lt 1024 ]; then
   maybe_create_swap "256M"
 fi
 
-# Time-slice turn gate: in time-slice mode a viewer only launches when
-# memguard.py has marked it as the active one (/tmp/active_viewer). Fail-open:
-# if memguard is missing or its heartbeat (/tmp/memguard.alive) is stale, the
-# viewer runs freely so a dead guardian can never deadlock the container.
-wait_for_turn() {
-  local name="$1" tries=0 active="" age=0
-  case "$DUAL_VIEWER_MODE" in
-    concurrent|off) return 0 ;;
-  esac
-  while :; do
-    if [ ! -f /tmp/active_viewer ] || [ ! -f /tmp/memguard.alive ]; then
-      tries=$((tries + 1))
-      if [ "$tries" -ge 3 ]; then
-        log "memguard turn file not present - running $name anyway (fail-open)"
-        return 0
-      fi
-      sleep 3 & wait $!
-      continue
-    fi
-    if [ -f /tmp/memguard.alive ]; then
-      age=$(($(date +%s 2>/dev/null || echo 0) - $(stat -c %Y /tmp/memguard.alive 2>/dev/null || echo 0)))
-      if [ "$age" -gt "${MEMGUARD_DEAD_AFTER:-90}" ]; then
-        log "memguard heartbeat stale (${age}s) - running $name anyway (fail-open)"
-        return 0
-      fi
-    fi
-    active=$(cat /tmp/active_viewer 2>/dev/null || echo both)
-    case "$active" in
-      both|"$name") return 0 ;;
-    esac
-    sleep 5 & wait $!
-  done
-}
-
-# Script-level knob used by BOTH viewers (must be set before the 9Hits gate).
+# Script-level knob (must be set before the 9Hits gate).
 # RESTART_DELAY was an nh.sh knob; here it is an alias for the supervisor delay.
 SUPERVISOR_DELAY="${SUPERVISOR_DELAY:-${RESTART_DELAY:-10}}"
 
@@ -441,7 +335,7 @@ if _yes "$NINEHITS_ENABLED"; then
     log "WARNING: detected ${mem_total_mb} MB RAM with ~${est_sessions} estimated sessions. Instances with < 1024 MB RAM (e.g. Render free tier 512 MB) may experience OOM kills with 4+ sessions. Consider lowering the session count (5-6 is recommended maximum) or using a bigger instance."
   fi
   if [ "$mem_total_mb" -gt 0 ] && [ "$mem_total_mb" -lt 2048 ]; then
-    log "NOTE: 9Hits v6 officially recommends >= 2 GB RAM per instance; this box has ~${mem_total_mb} MB. If sessions crash-loop, disable FeelingSurf (FEELINGSURF_ENABLED=no), run fewer sessions, or use a bigger instance."
+    log "NOTE: 9Hits v6 officially recommends >= 2 GB RAM per instance; this box has ~${mem_total_mb} MB. If sessions crash-loop, run fewer sessions or use a bigger instance."
   fi
 
   # ------------------------------------------------------- redacted arg echo
@@ -620,9 +514,8 @@ if _yes "$NINEHITS_ENABLED"; then
     maybe_update_viewer
 
     if [ ! -x "$NH_BIN" ]; then
-      # e.g. Hugging Face Gradio Spaces: the app runs in HF's own Python
-      # runtime and never builds our Docker image, so the viewer binary
-      # simply does not exist. Wait quietly instead of hot restart-looping.
+      # A runtime that never built our Docker image has no viewer binary.
+      # Wait quietly instead of hot restart-looping.
       log "ERROR: $NH_BIN is missing - 9Hits cannot start on this runtime (use the Docker image). Checking again every 5 min."
       while [ ! -x "$NH_BIN" ]; do
         echo "down" > /tmp/viewer.state
@@ -637,8 +530,6 @@ if _yes "$NINEHITS_ENABLED"; then
     NH_SP_ON="$NH_SP"   # recomputed per launch (auto-fallback may disable it)
 
     while :; do
-      # In time-slice mode wait until memguard.py gives us the active turn.
-      wait_for_turn ninehits
       wait_display || true
 
       local run_args=(--auto-start --in-loop)
@@ -695,7 +586,6 @@ if _yes "$NINEHITS_ENABLED"; then
 
       # The init pass can take minutes; re-check the turn so a long init never
       # leaks the run pass into the other viewer's time-slice.
-      wait_for_turn ninehits
 
       echo "run" > /tmp/viewer.state
       touch /tmp/viewer.lastoutput 2>/dev/null || true
@@ -754,110 +644,22 @@ if _yes "$NINEHITS_ENABLED"; then
   fi
   export VNC_SUPERVISOR_PID
 else
-  # 9Hits is OFF by default so the container fits in 512 MB (two Chromium
-  # viewers OOM the free plan). Skip the entire 9Hits stack: the nh / Xvfb /
-  # VNC supervisors, fix_shm, the proxy-list fetch, and the ACCESS_KEY /
-  # pool / RAM warnings. Advertise the disabled state to the health server.
-  log "9Hits disabled (NINEHITS_ENABLED=no) - running FeelingSurf-only + /health; set NINEHITS_ENABLED=yes to run both viewers (LOW_MEMORY + memguard keep them inside small plans)"
+  # 9Hits explicitly disabled: skip the entire 9Hits stack (nh / Xvfb / VNC
+  # supervisors, fix_shm, the proxy-list fetch and the ACCESS_KEY / pool / RAM
+  # warnings) and advertise the disabled state to the health server.
+  log "9Hits disabled (NINEHITS_ENABLED=no) - running /health only; set NINEHITS_ENABLED=yes to run the viewer"
   export SUPERVISOR_PID=0 XVFB_SUPERVISOR_PID=0 VNC_SUPERVISOR_PID=0
-fi
-
-# FeelingSurf runs in this same container/deployment. Keep it under a separate
-# supervisor so either viewer can restart without taking down the other one.
-feelingsurf_supervisor() {
-  trap 'log "FeelingSurf supervisor stopped"; exit 0' TERM INT
-  FS_SP_ON="$FS_SP"   # auto-fallback may disable it
-  while :; do
-    # In time-slice mode wait until memguard.py gives us the active turn.
-    wait_for_turn feelingsurf
-    # Extreme mode: single-process, with crash auto-fallback (3 quick crashes
-    # -> relaunch on the balanced flag set instead of loop-forever).
-    if [ "$LOW_MEMORY" = "extreme" ] && _yes "$FS_SP_ON"; then
-      if [ -f /tmp/feelingsurf.restarts ]; then
-        local streak
-        streak=$(crash_streak feelingsurf)
-        if [ "$streak" -ge 3 ]; then
-          FS_SP_ON=no
-          log "FeelingSurf crashed $streak times at startup - disabling single-process for FeelingSurf (balanced flags only)"
-        fi
-      fi
-    fi
-    export FS_SP="$FS_SP_ON"
-    log "launching FeelingSurf viewer (FS_SP=$FS_SP_ON FS_GL_MODE=$FS_GL_MODE)"
-    if [ "$(id -u)" = "0" ] && id fsviewer >/dev/null 2>&1; then
-      runuser -u fsviewer -- "$SCRIPT_DIR/feelingsurf-run.sh" &
-    else
-      # Non-root runtime (e.g. Hugging Face Gradio Spaces): run directly.
-      "$SCRIPT_DIR/feelingsurf-run.sh" &
-    fi
-    local fpid=$!
-    echo "$fpid" > /tmp/feelingsurf.pid
-    wait "$fpid"
-    local code=$?
-    rm -f /tmp/feelingsurf.pid
-    local restarts=0
-    [ -f /tmp/feelingsurf.restarts ] && restarts=$(cat /tmp/feelingsurf.restarts 2>/dev/null || echo 0)
-    echo $((restarts + 1)) > /tmp/feelingsurf.restarts
-    log "FeelingSurf exited (code $code) - restarting in ${SUPERVISOR_DELAY}s"
-    sleep "${SUPERVISOR_DELAY}" & wait $!
-  done
-}
-
-if [ "$RUN_MODE" = "ninehits-only" ]; then
-  export FEELINGSURF_SUPERVISOR_PID=0
-  log "ninehits-only mode: FeelingSurf slot is owned by supervisor.py - not starting a second instance here"
-else
-case "${FEELINGSURF_ENABLED:-yes}" in
-  0|no|false|off)
-    export FEELINGSURF_SUPERVISOR_PID=0
-    log "FeelingSurf disabled by FEELINGSURF_ENABLED=${FEELINGSURF_ENABLED}"
-    ;;
-  *)
-    if [ ! -x /usr/bin/FeelingSurfViewer ]; then
-      # Runtime without our Docker image (e.g. HF Gradio Spaces): skip quietly.
-      export FEELINGSURF_ENABLED=no FEELINGSURF_SUPERVISOR_PID=0
-      log "FeelingSurf binary not installed on this runtime - disabling FeelingSurf"
-    else
-      if [ -z "${access_token:-${ACCESS_TOKEN:-}}" ]; then
-        log "WARNING: ACCESS_TOKEN is not set - FeelingSurf cannot authenticate"
-      fi
-      feelingsurf_supervisor &
-      export FEELINGSURF_SUPERVISOR_PID=$!
-    fi
-    ;;
-esac
-fi
-
-# If both viewers ended up disabled (explicitly or because the binaries are
-# absent), make it obvious that only /health will run.
-if ! _yes "$NINEHITS_ENABLED" && [ "${FEELINGSURF_SUPERVISOR_PID:-0}" -eq 0 ]; then
-  log "WARNING: both viewers are disabled (NINEHITS_ENABLED=no and FEELINGSURF_ENABLED=no/absent) - only /health will run"
 fi
 
 if _yes "$NINEHITS_ENABLED"; then
   log "9Hits supervisor pid=$SUPERVISOR_PID (Xvfb $NH_DISPLAY pid=$XVFB_SUPERVISOR_PID)"
   [ "$VNC_SUPERVISOR_PID" -gt 1 ] && log "VNC supervisor pid=$VNC_SUPERVISOR_PID (port ${VNC_PORT:-5901})"
-fi
-[ "${FEELINGSURF_SUPERVISOR_PID:-0}" -gt 1 ] && log "FeelingSurf supervisor pid=$FEELINGSURF_SUPERVISOR_PID"
-
-# Memory guardian + time-slice scheduler. It watches total RSS against the
-# cgroup limit and (a) restarts the heaviest viewer before the platform OOMs
-# the container, or (b) in time-slice mode alternates the two viewers. The
-# supervisors' wait_for_turn() gates fail open if this ever dies.
-if [ "$RUN_MODE" = "ninehits-only" ]; then
-  export MEMGUARD_PID=0
-  log "ninehits-only mode: memguard is owned by supervisor.py - not starting a second guardian here"
-elif [ "$DUAL_VIEWER_MODE" != "off" ] && [ -f "$SCRIPT_DIR/memguard.py" ]; then
-  python3 "$SCRIPT_DIR/memguard.py" &
-  export MEMGUARD_PID=$!
-  log "memguard started (DUAL_VIEWER_MODE=$DUAL_VIEWER_MODE, TIME_SLICE=${TIME_SLICE}s, pid=$MEMGUARD_PID)"
 else
-  export MEMGUARD_PID=0
-  log "memguard disabled (DUAL_VIEWER_MODE=$DUAL_VIEWER_MODE) - no OOM protection; both viewers may not fit small plans"
+  log "WARNING: the viewer is disabled (NINEHITS_ENABLED=no) - only /health will run"
 fi
 
 if [ "$RUN_MODE" != "ninehits-only" ]; then
-  log "combined health endpoint on 0.0.0.0:$PORT (GET /health)"
+  log "health endpoint on 0.0.0.0:$PORT (GET /health)"
 fi
 
 # ---------------------------------------------------------------- ninehits-only
@@ -870,8 +672,8 @@ fi
 #     supervisor can re-launch us (the per-slot crash recovery).
 #   * Forward SIGTERM to the 9Hits supervisor + Xvfb + VNC, so the
 #     container can shut down on ``docker stop``.
-#   * NOT start the FeelingSurf supervisor, the memguard, or the health
-#     server - those are independent slots owned by the Python supervisor.
+#   * NOT start the health server - that is an independent slot owned by
+#     the Python supervisor.
 if [ "$RUN_MODE" = "ninehits-only" ]; then
   if [ "${SUPERVISOR_PID:-0}" -le 1 ] || [ "${XVFB_SUPERVISOR_PID:-0}" -le 1 ]; then
     log "ninehits-only mode: 9Hits is not enabled (SUPERVISOR_PID=$SUPERVISOR_PID) - exiting"
