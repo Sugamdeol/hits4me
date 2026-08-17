@@ -216,12 +216,7 @@ operation.
   one actual start.
 * **Per-slot memory cap** — `NH_MAX_MEMORY_MB` / `NINEHITS_MAX_MEMORY_MB`
   and `FS_MAX_MEMORY_MB` / `FEELINGSURF_MAX_MEMORY_MB` set a soft cap
-  on the slot's process tree RSS. When a viewer exceeds its cap, the
-  supervisor gracefully restarts **only that slot** (the other one
-  keeps running). Default = 0 (off). Sensible values on a 512 MB free
-  plan: `400` for both. This is independent of the total-RSS
-  `memguard.py`; the per-slot cap catches a single runaway viewer
-  before it can crash the cgroup.
+  on the slot's process tree PSS (proportional set size). When a viewer exceeds its cap for **two consecutive samples**, the supervisor gracefully restarts **only that slot** (the other one keeps running). Default = 0 (off). Sensible values on a 512 MB free plan: `400` for both. PSS is read from `/proc/<pid>/smaps_rollup` (Linux >= 4.14) with a VmRSS fallback on older kernels; summing PSS — not summed RSS — avoids counting Chromium's large shared mappings once per process. This is independent of the total-RSS `memguard.py`; the per-slot cap catches a single runaway viewer before it can crash the cgroup.
 * **Per-slot child-count cap** — `NH_MAX_CHILDREN` /
   `NINEHITS_MAX_CHILDREN` and the FS equivalents guard against fork
   bombs (a Chromium that started spawning helper processes
@@ -522,8 +517,8 @@ Viewer config flags are applied by the **init pass** (`nhviewer <flags> --exit-o
 | `LOG_DIR` | — | `/logs` | Per-slot log directory. `logs/9hits.log`, `logs/feelingsurf.log`, `logs/memguard.log`, `logs/health.log`, `logs/supervisor.log` |
 | `SLOT_LOG_MAX_BYTES` | — | `10485760` | Rotate per-slot log when it exceeds this size |
 | `SLOT_LOG_BACKUPS` | — | `2` | Number of rotated copies to keep per slot |
-| `NH_MAX_MEMORY_MB` / `NINEHITS_MAX_MEMORY_MB` | — | `0` | Per-slot memory cap (RSS of the process tree). When exceeded, gracefully restart ONLY 9Hits. Sensible value on 512 MB free: `400` |
-| `FS_MAX_MEMORY_MB` / `FEELINGSURF_MAX_MEMORY_MB` | — | `0` | Same for FeelingSurf. Sensible value on 512 MB free: `400` |
+| `NH_MAX_MEMORY_MB` / `NINEHITS_MAX_MEMORY_MB` | — | `0` | Per-slot memory cap (PSS of the process tree, two consecutive samples). When exceeded for two consecutive checks, gracefully restart ONLY 9Hits. Uses `/proc/<pid>/smaps_rollup` PSS with VmRSS fallback. Sensible value on 512 MB free: `400` |
+| `FS_MAX_MEMORY_MB` / `FEELINGSURF_MAX_MEMORY_MB` | — | `0` | Same for FeelingSurf (PSS of the process tree, two consecutive samples). Sensible value on 512 MB free: `400` |
 | `NH_MAX_CHILDREN` / `NINEHITS_MAX_CHILDREN` | — | `0` | Refuse a 9Hits slot whose process tree has more than N children (fork-bomb guard) |
 | `FS_MAX_CHILDREN` / `FEELINGSURF_MAX_CHILDREN` | — | `0` | Same for FeelingSurf |
 | `NH_CPU_SHARES` | — | *none* | Linux cgroup v1 CPU weight for the 9Hits slot (1-262144) |
@@ -626,9 +621,9 @@ GET https://<your-service>/health
   * `"disabled"` — the slot is off by configuration.
 * `memory_mb` and `child_count` (per slot) are sampled at
   `NINEHITS_CHECK_INTERVAL` / `FEELINGSURF_CHECK_INTERVAL` (default
-  30 s). They power the per-slot memory cap: when a slot's RSS
-  exceeds its `max_memory_mb` cap, the supervisor restarts only
-  that slot.
+  30 s). They power the per-slot memory cap: when a slot's PSS
+  exceeds its `max_memory_mb` cap for two consecutive checks, the supervisor restarts only
+  that slot (VmRSS fallback on kernels without `smaps_rollup`).
 * Backward-compat flat fields (`viewer_pid`, `viewer_phase`,
   `viewer_silent_seconds`, `xvfb_running`, `restarts`, `viewer_running`,
   `feelingsurf_running`, `feelingsurf_pid`, `feelingsurf_restart_count`,
@@ -648,6 +643,8 @@ Point any free uptime monitor (**UptimeRobot, Better Stack, Cron-job.org, Kuma**
 * **`User not found!`** — `ACCESS_KEY` is incorrect or missing.
 * **Logs stop right after deploy / viewer never appears (the Aug-2026 upstream change)** — the renewed `9hitste/appv6` image used to extract a ~145 MB bzip2 viewer tarball at every container start through its own `/nh.sh`, stalling for many minutes on free-tier CPUs and then hanging silently. This repo no longer does that: the viewer is extracted at **image build time** and started via the official two-pass flow with our own supervised **Xvfb :99**. If you still see stalls, check `/health` — `viewer_phase` (`init`/`run`/`down`) and `viewer_silent_seconds` tell you exactly where it is.
 * **Run pass exits with code 133 in `extreme` mode** — `LOW_MEMORY=extreme` adds `--single-process --in-process-gpu`, a mode Chromium officially labels unsupported; on Render's free 512 MB plan it aborts within seconds (`133` = 128 + 5 = SIGTRAP), so the 9Hits slot crash-loops (often preceded by init passes timing out with code `124`). The fix ships `LOW_MEMORY=balanced` as the default in the Dockerfile, `render.yaml`, and `.env.example`, and raises `INIT_TIMEOUT` to `600`. If you deliberately re-enable `extreme`, `start.sh`'s fast-crash detector writes `/tmp/viewer.fastcrash` when the run pass dies in under 10 s and relaunches **without** `--single-process` on the very next attempt. Existing Render services need a manual redeploy (or a Blueprint re-apply) to pick up the new env.
+* **9Hits restarts every ~30 s with `over memory cap: memory 1471 MB > cap 400 MB` while `/health` shows `memory_used_mb: 158`** — the per-slot cap was summing **VmRSS** over the whole Chromium process tree. Each of Chromium's ~20 processes maps the same binary/fonts/shm, so the shared pages were counted ~20×: a healthy ~158 MB tree looked like 1471 MB and the slot was SIGTERMed every check (exit 143, always during the init pass, so no session ever ran — and the teardown took Xvfb with it). Fixed by summing **PSS** (proportional set size) from `/proc/<pid>/smaps_rollup` (Linux >= 4.14, VmRSS fallback on older kernels) and requiring **two consecutive over-cap samples** (`memory %.0f MB (PSS) > cap %d MB for 2 consecutive checks`) before restarting.
+* **Two FeelingSurf instances / FeelingSurf aborts with `Failed to shutdown.`, exit 133 or 139 (and `memory_peak_mb` ~581 MB)** — under `supervisor.py`, `start.sh` runs as `start.sh ninehits-only`, but the `ninehits-only` branch whose own comment says it must `NOT start the FeelingSurf supervisor, the memguard, or the health server` sat **after** those startup blocks. Every 9Hits restart therefore spawned a second Electron that fought the real one over the Xvfb display and `127.0.0.1:3000`, trapping with `FATAL:electron/shell/browser/electron_browser_main_parts.cc:523] Failed to shutdown.` (code 133 = SIGTRAP, 139 = SIGSEGV) and spiking the peak to 581 MB. Fixed by gating the FeelingSurf and memguard blocks behind `RUN_MODE=ninehits-only` checks and suppressing the `combined health endpoint` banner in that mode. If a single FeelingSurf still traps under `--single-process`, set `FS_GL_MODE=disable-gpu`.
 * **`WATCHDOG: no output ... no CPU progress` in the logs** — the viewer wedged (typically OOM-adjacent on 512 MB instances or a stuck Chromium) and was restarted automatically. If it repeats, lower the session count, set `FEELINGSURF_ENABLED=no`, or move to a bigger instance (v6 recommends ≥ 2 GB RAM).
 * **Init pass keeps failing** (`init pass failed/timed out`) — the 9Hits API was unreachable or very slow; the supervisor retries 3× with backoff and then launches anyway (the next restart re-applies config). Increase `INIT_TIMEOUT` on very slow networks.
 * **`/dev/shm` is only 64 MB** — free Docker tiers can't set `--shm-size`. The entrypoint tries a best-effort remount; where you control Docker yourself (oracle/compose), keep `shm_size: 2g` (already in `docker-compose.yml`).

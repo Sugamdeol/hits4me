@@ -803,6 +803,10 @@ feelingsurf_supervisor() {
   done
 }
 
+if [ "$RUN_MODE" = "ninehits-only" ]; then
+  export FEELINGSURF_SUPERVISOR_PID=0
+  log "ninehits-only mode: FeelingSurf slot is owned by supervisor.py - not starting a second instance here"
+else
 case "${FEELINGSURF_ENABLED:-yes}" in
   0|no|false|off)
     export FEELINGSURF_SUPERVISOR_PID=0
@@ -822,6 +826,7 @@ case "${FEELINGSURF_ENABLED:-yes}" in
     fi
     ;;
 esac
+fi
 
 # If both viewers ended up disabled (explicitly or because the binaries are
 # absent), make it obvious that only /health will run.
@@ -839,7 +844,10 @@ fi
 # cgroup limit and (a) restarts the heaviest viewer before the platform OOMs
 # the container, or (b) in time-slice mode alternates the two viewers. The
 # supervisors' wait_for_turn() gates fail open if this ever dies.
-if [ "$DUAL_VIEWER_MODE" != "off" ] && [ -f "$SCRIPT_DIR/memguard.py" ]; then
+if [ "$RUN_MODE" = "ninehits-only" ]; then
+  export MEMGUARD_PID=0
+  log "ninehits-only mode: memguard is owned by supervisor.py - not starting a second guardian here"
+elif [ "$DUAL_VIEWER_MODE" != "off" ] && [ -f "$SCRIPT_DIR/memguard.py" ]; then
   python3 "$SCRIPT_DIR/memguard.py" &
   export MEMGUARD_PID=$!
   log "memguard started (DUAL_VIEWER_MODE=$DUAL_VIEWER_MODE, TIME_SLICE=${TIME_SLICE}s, pid=$MEMGUARD_PID)"
@@ -848,7 +856,9 @@ else
   log "memguard disabled (DUAL_VIEWER_MODE=$DUAL_VIEWER_MODE) - no OOM protection; both viewers may not fit small plans"
 fi
 
-log "combined health endpoint on 0.0.0.0:$PORT (GET /health)"
+if [ "$RUN_MODE" != "ninehits-only" ]; then
+  log "combined health endpoint on 0.0.0.0:$PORT (GET /health)"
+fi
 
 # ---------------------------------------------------------------- ninehits-only
 # When the Python ``supervisor.py`` is in charge it runs this script as

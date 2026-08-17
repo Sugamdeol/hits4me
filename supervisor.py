@@ -385,13 +385,40 @@ def _rss_mb(pid: int) -> float:
     return 0.0
 
 
+def _pss_mb(pid: int) -> Optional[float]:
+    """Proportional set size for one pid, or None when unavailable.
+
+    PSS divides every shared page by the number of processes mapping it,
+    so summing PSS over a process tree gives the tree's REAL footprint.
+    Summing VmRSS instead counts Chromium's large shared mappings once
+    per process (~1.4 GB reported for a ~160 MB tree), which tripped the
+    per-slot cap and restarted the viewer every 30 seconds.
+    Requires Linux >= 4.14 (smaps_rollup)."""
+    try:
+        with open("/proc/%d/smaps_rollup" % pid, "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("Pss:"):
+                    return int(line.split()[1]) / 1024.0
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _proc_mem_mb(pid: int) -> float:
+    """PSS when the kernel exposes it, else VmRSS (older kernels)."""
+    pss = _pss_mb(pid)
+    return pss if pss is not None else _rss_mb(pid)
+
+
 def _tree_stats(root_pid: int) -> Tuple[float, int]:
-    """Return (total_RSS_MB, process_count) for the subtree rooted at
-    ``root_pid``. Excludes the root if it is no longer alive."""
+    """Return (total_PSS_MB, process_count) for the subtree rooted at
+    ``root_pid``. Uses PSS (proportional set size) so shared pages are
+    counted once, not once per process. Falls back to VmRSS on kernels
+    without smaps_rollup. Excludes the root if it is no longer alive."""
     if root_pid <= 0 or not _pid_alive(root_pid):
         return 0.0, 0
     pids = _process_tree(root_pid)
-    rss = sum(_rss_mb(p) for p in pids)
+    rss = sum(_proc_mem_mb(p) for p in pids)
     return round(rss, 1), len(pids)
 
 
@@ -585,6 +612,7 @@ class ManagedSlot:
         self._last_exit_code: Optional[int] = None
         self._last_error: Optional[str] = None
         self._last_memory_mb: float = 0.0
+        self._mem_breaches: int = 0
         self._last_child_count: int = 0
         self._started_at: Optional[float] = None
         self._last_crash_at: float = 0.0
@@ -927,15 +955,23 @@ class ManagedSlot:
         """Returns a reason string if the slot must be restarted for
         exceeding its memory cap, else None."""
         if self.max_memory_mb <= 0:
+            self._mem_breaches = 0
             return None
         if self._proc is None or not _pid_alive(self._proc.pid):
+            self._mem_breaches = 0
             return None
         if self._last_memory_mb <= 0:
+            self._mem_breaches = 0
             return None
         if self._last_memory_mb > self.max_memory_mb:
-            return (
-                "memory %.0f MB > cap %d MB" % (self._last_memory_mb, self.max_memory_mb)
-            )
+            self._mem_breaches += 1
+            if self._mem_breaches >= 2:
+                self._mem_breaches = 0
+                return (
+                    "memory %.0f MB (PSS) > cap %d MB for 2 consecutive checks" % (self._last_memory_mb, self.max_memory_mb)
+                )
+            return None
+        self._mem_breaches = 0
         return None
 
     def _check_children_cap(self) -> Optional[str]:
