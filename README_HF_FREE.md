@@ -47,8 +47,8 @@ logs or dashboard.
    viewers directly.
 
 `app.py` is retained as a compatibility wrapper and imports `app_hf.py`.
-`app_huggingface.py`, `huggingface_app.py`, and `gradio_app.py` are synchronized
-aliases of the same implementation.
+`app_hf.py` is the single native HF entrypoint (the duplicate aliases
+`app_huggingface.py`, `huggingface_app.py`, and `gradio_app.py` were removed).
 
 ## Runtime defaults
 

@@ -1,5 +1,7 @@
-# Updates the existing 9hits-viewer Render service so one container runs
-# both 9Hits and FeelingSurf AT THE SAME TIME on the free 512 MB plan.
+# Updates the existing 9hits-viewer Render service. This service runs ONLY
+# the 9Hits viewer (FeelingSurf runs in its own separate `feelingsurf`
+# service defined below). It also acts as a keep-alive client for that
+# separate FeelingSurf service.
 # Do not rename this service — a different Blueprint name would create a
 # second deployment instead of updating
 # https://dashboard.render.com/web/srv-da09a7dbedkc73a829cg
@@ -11,39 +13,30 @@ services:
     plan: free
     healthCheckPath: /health
     envVars:
-      # 9Hits access key (hard-coded). FeelingSurf token preconfigured below.
+      # 9Hits access key (hard-coded). FeelingSurf's token lives on the
+      # separate `feelingsurf` service below.
       - key: ACCESS_KEY
         value: "23f9097a8d823267188c49b3cc0598b1"
-      - key: ACCESS_TOKEN
-        value: "27f77ef00e768cdbdc7352f3456e35b5"
 
       - key: PORT
         value: "10000"
 
-      # --- BOTH viewers, CONCURRENTLY, in 512 MB -----------------------------
+      # --- 9Hits-only viewer in 512 MB --------------------------------------
       # LOW_MEMORY=balanced is the safe default here. LOW_MEMORY=extreme adds
       # --single-process --in-process-gpu, which Chromium labels unsupported
       # and which dies within seconds on Render's free 512 MB plan (run pass
       # exits with code 133 = SIGTRAP), producing a crash loop.
-      # Layers that keep the balanced pair inside the budget:
-      #   1. LOW_MEMORY=balanced shrinks both Chromiums (no --single-process).
-      #   2. memguard.py watches total RSS (limit 512 MB, acts at 97% = 497 MB)
-      #      and restarts the heaviest viewer BEFORE the platform can OOM-kill
-      #      the container - a safety valve, not a scheduler.
-      #   3. Per-viewer caps NH_MAX_MEMORY_MB / FS_MAX_MEMORY_MB = 400 restart
-      #      only the runaway viewer, leaving the other one untouched.
-      #   4. DUAL_VIEWER_MODE=concurrent  = always run both, never time-slice.
-      #   5. INIT_TIMEOUT=600 gives the 9Hits config init pass enough time on
-      #      Render's throttled 0.1 vCPU (300s produced code 124 timeouts).
-      #   6. If you do re-enable extreme, start.sh's fast-crash detector drops
-      #      --single-process on the very next launch when the run pass dies
-      #      in under 10 seconds.
+      #   * FEELINGSURF_ENABLED=no  -> FeelingSurf runs in the separate service.
+      #   * DUAL_VIEWER_MODE=off    -> single viewer, no dual-viewer logic.
+      #   * NH_MAX_MEMORY_MB=400 restarts only 9Hits if it runs away.
+      #   * INIT_TIMEOUT=600 gives the 9Hits config init pass enough time on
+      #     Render's throttled 0.1 vCPU (300s produced code 124 timeouts).
       - key: NINEHITS_ENABLED
         value: "yes"
       - key: FEELINGSURF_ENABLED
-        value: "yes"
+        value: "no"
       - key: DUAL_VIEWER_MODE
-        value: "concurrent"     # both at the same time; auto escalates to time-slice
+        value: "off"
       - key: LOW_MEMORY
         value: "balanced"       # balanced | extreme | auto | off
                                 # extreme (--single-process) crashes with code
@@ -52,20 +45,8 @@ services:
         value: "600"            # 9Hits init pass budget (0.1 vCPU is slow)
       - key: NH_SP
         value: "no"             # single-process for 9Hits (unstable on Render)
-      - key: FS_SP
-        value: "no"             # single-process for FeelingSurf (unstable here)
       - key: NH_MAX_MEMORY_MB
         value: "400"            # restart only 9Hits if its tree exceeds 400 MB
-      - key: FS_MAX_MEMORY_MB
-        value: "400"            # restart only FeelingSurf above 400 MB
-      - key: FS_GL_MODE
-        value: "swiftshader"    # swiftshader | disable-gpu (last resort)
-      - key: MEMGUARD_LIMIT_MB
-        value: "512"            # Render free plan limit
-      - key: MEMGUARD_HARD_PCT
-        value: "97"             # act at 497 MB so the platform OOM never fires
-      - key: MEMGUARD_COOLDOWN
-        value: "120"            # min seconds between guardian restarts
       - key: CLEAR_ALL_SESSIONS
         value: "yes"
       - key: SYSTEM_SESSION
@@ -88,3 +69,53 @@ services:
         value: "2h"
       - key: SUPERVISOR_DELAY
         value: "10"
+
+      # Keep-alive pinger (see keepalive.py): this 9Hits deployment pings the
+      # separate FeelingSurf service below every FEELINGSURF_PING_INTERVAL s.
+      # Disabled unless FEELINGSURF_URL is set to the FeelingSurf service URL.
+      - key: FEELINGSURF_URL
+        value: "https://feelingsurf.onrender.com"  # replace with your Feelingsurf service URL
+      - key: FEELINGSURF_PING_INTERVAL
+        value: "300"
+      - key: FEELINGSURF_PING_TIMEOUT
+        value: "10"
+
+  # ---------------------------------------------------------------------------
+  # Standalone FeelingSurf deployment - a SEPARATE web service that runs ONLY
+  # the FeelingSurf viewer (Dockerfile.feelingsurf, NINEHITS_ENABLED=no). The
+  # 9hits-viewer service above is 9Hits-only and pings this one via
+  # FEELINGSURF_URL every FEELINGSURF_PING_INTERVAL s to keep it awake.
+  #
+  # NOTE: Render's FREE plan only allows ONE web service. Use a paid plan (or
+  # another host) to run the two services side by side.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: feelingsurf
+    runtime: docker
+    dockerfilePath: ./Dockerfile.feelingsurf
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      # FeelingSurf access token (from https://www.feelingsurf.fr/member).
+      - key: ACCESS_TOKEN
+        value: "27f77ef00e768cdbdc7352f3456e35b5"
+      - key: PORT
+        value: "10000"
+      - key: FEELINGSURF_PORT
+        value: "3000"
+      - key: NINEHITS_ENABLED
+        value: "no"
+      - key: FEELINGSURF_ENABLED
+        value: "yes"
+      - key: DUAL_VIEWER_MODE
+        value: "off"
+      - key: LOW_MEMORY
+        value: "balanced"
+      - key: FS_GL_MODE
+        value: "swiftshader"
+      - key: FS_SP
+        value: "no"
+      - key: SESSION_NOTE
+        value: "feelingsurf"
+      - key: NOTE
+        value: "feelingsurf"

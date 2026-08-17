@@ -8,9 +8,9 @@ Gradio application, not the 512 MB Docker deployment:
 - **memory:** native viewer behavior on the HF runtime, with no memory
   guardian, no time-slice scheduler, and no low-memory flags.
 
-The Docker deployment still contains the separate `start.sh`/`memguard.py`
-small-host safeguards for Render and Koyeb. They are not started by the HF
-entrypoint.
+The Docker deployment uses `start.sh` for the small-host safeguards (the
+`memguard.py` guardian was removed since the 9Hits deployment is now
+9Hits-only). They are not started by the HF entrypoint.
 
 ## HF entrypoint behavior
 
@@ -59,8 +59,8 @@ the UI.
    two viewer families starting concurrently.
 
 `app.py` is a compatibility wrapper for older Spaces that still point at that
-filename. `app_huggingface.py`, `huggingface_app.py`, and `gradio_app.py` are
-synchronized aliases.
+filename. `app_hf.py` is the single HF entrypoint (the duplicate aliases
+`app_huggingface.py`, `huggingface_app.py`, and `gradio_app.py` were removed).
 
 ## Health and dashboard
 

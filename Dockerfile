@@ -1,5 +1,10 @@
 # =============================================================================
-# 9Hits Viewer v6 + FeelingSurf Viewer + /health endpoint - ready for Render.com
+# 9Hits Viewer v6 + /health endpoint - the 9Hits deployment.
+#
+# This image runs the 9Hits viewer (FeelingSurf is available as a separate
+# standalone deployment via Dockerfile.feelingsurf). The FeelingSurf binary is
+# still baked in for backwards compatibility, but FEELINGSURF_ENABLED defaults
+# to "no" so the image runs 9Hits only unless explicitly enabled.
 #
 # Based on the official 9Hits image: https://hub.docker.com/r/9hitste/appv6
 # (it carries the correct system libraries plus the viewer tarball baked in).
@@ -82,30 +87,34 @@ WORKDIR /
 COPY start.sh        /start.sh
 COPY run_pty.py      /run_pty.py
 COPY health_server.py /health_server.py
-COPY memguard.py     /memguard.py
 COPY fetch_proxy_list.py /fetch_proxy_list.py
 COPY feelingsurf-run.sh /feelingsurf-run.sh
 COPY supervisor.py   /supervisor.py
+COPY keepalive.py    /keepalive.py
 
 # Persistent per-service log directory (mounted by docker-compose, /logs on the
 # host when bind-mounting, or a tmpfs otherwise - the supervisor recreates
 # the directory on every start).
 RUN mkdir -p /logs && chmod 1777 /logs
 
-RUN chmod +x /start.sh /run_pty.py /health_server.py /memguard.py /fetch_proxy_list.py /feelingsurf-run.sh /supervisor.py
+RUN chmod +x /start.sh /run_pty.py /health_server.py /fetch_proxy_list.py /feelingsurf-run.sh /supervisor.py /keepalive.py
 
-# 512MB dual-viewer survival (see start.sh): LOW_MEMORY shrinks both
-# Chromiums, memguard.py restarts the heaviest viewer before the platform can
-# OOM the container, and auto mode alternates the viewers when they still
-# don't fit simultaneously (Render free = 512 MB).
+# 9Hits-only deployment (the standalone FeelingSurf image is
+# Dockerfile.feelingsurf). LOW_MEMORY shrinks the Chromium so a single viewer
+# stays comfortably within small free plans.
 #
-# Defaults: BOTH viewers ON, both at the same time, with per-viewer memory
-# caps that gracefully restart a single runaway viewer. The 24x7 process
-# manager (supervisor.py) is the entrypoint and keeps everything alive
-# independently.
+# Defaults: 9Hits ON, FeelingSurf OFF. DUAL_VIEWER_MODE is off (single-viewer
+# box). The 24x7 process manager (supervisor.py) is the entrypoint and keeps
+# 9Hits + the /health server alive. supervisor.py also starts the optional
+# keep-alive pinger (keepalive.py) when FEELINGSURF_URL is set, so this
+# deployment pings the separate FeelingSurf service to keep it awake.
+# ACCESS_KEY / ACCESS_TOKEN are baked in below so every host that builds this
+# Dockerfile (docker-compose, Render, Koyeb, Fly, Railway, Zeabur, ...) gets
+# the tokens automatically - no manual env vars needed.
 ENV PORT=10000 \
     FEELINGSURF_PORT=3000 \
-    FEELINGSURF_ENABLED=yes \
+    ACCESS_KEY=23f9097a8d823267188c49b3cc0598b1 \
+    FEELINGSURF_ENABLED=no \
     NINEHITS_ENABLED=yes \
     SUPERVISOR_DELAY=10 \
     SUPERVISOR_MAX_DELAY=120 \
@@ -119,7 +128,7 @@ ENV PORT=10000 \
     INIT_TIMEOUT=600 \
     NH_WATCHDOG=yes \
     NH_WATCHDOG_STUCK=600 \
-    DUAL_VIEWER_MODE=concurrent \
+    DUAL_VIEWER_MODE=off \
     TIME_SLICE=1500 \
     LOW_MEMORY=balanced \
     NH_MAX_MEMORY_MB=400 \
@@ -134,7 +143,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD wget -q --spider "http://localhost:${PORT}/health" || exit 1
 
 # /supervisor.py is the new process manager: it owns one long-lived child
-# per slot (9Hits launcher, FeelingSurf launcher, memguard, health server)
+# per slot (9Hits launcher, FeelingSurf launcher, health server)
 # and restarts each independently on crash. /start.sh is still in the image
 # for backwards compatibility (it can be run directly with `docker run ...`
 # and no extra arguments, and the ninehits-only mode is what the Python

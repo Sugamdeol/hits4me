@@ -1,0 +1,93 @@
+# =============================================================================
+# FeelingSurf Viewer - STANDALONE deployment (separate service)
+#
+# This builds an independent service/container that runs ONLY the FeelingSurf
+# viewer (plus the /health endpoint it needs to pass the platform health
+# check). It is intentionally a DIFFERENT deployment from the existing
+# combined 9Hits + FeelingSurf container (Dockerfile) - it does NOT run the
+# 9Hits viewer, so the two can be deployed side by side on the same host.
+#
+# Design:
+#   * Same base image (9hitste/appv6) so the Chromium/X11 libraries and the
+#     FeelingSurf .deb install are identical to the combined image - this is
+#     the exact same package set the main Dockerfile uses.
+#   * Reuses the existing supervisor.py as PID 1 but with NINEHITS_ENABLED=no
+#     so it only manages the FeelingSurf viewer + the /health server. The
+#     supervisor gives the standalone service the same auto-restart / log
+#     rotation / memory-cap reliability as the combined deployment.
+#   * Exposes PORT (default 10000) for the /health endpoint the platform
+#     health check and the 9Hits keep-alive ping will hit.
+# =============================================================================
+
+FROM 9hitste/appv6
+
+ARG FSVIEWER_VERSION=2.5.2
+
+RUN set -eux; \
+    command -v apt-get >/dev/null 2>&1 || { \
+        echo "ERROR: the 9Hits base image must provide apt-get" >&2; exit 1; \
+    }; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        python3 ca-certificates wget bzip2 psmisc bc \
+        libasound2 libgbm1 libgtk-3-0 libnotify4 libnss3 libsecret-1-0 \
+        libxss1 libxtst6 libatspi2.0-0 libatomic1 libcanberra-gtk-module \
+        xdg-utils xvfb x11-utils; \
+    getent group audio >/dev/null || groupadd -r audio; \
+    getent group fsviewer >/dev/null || groupadd -r fsviewer; \
+    id fsviewer >/dev/null 2>&1 || useradd -r -m -g fsviewer -G audio fsviewer; \
+    echo 'pcm.!default {\n  type plug\n  slave.pcm "null"\n}' > /etc/asound.conf; \
+    arch="$(dpkg --print-architecture)"; \
+    wget -q -O /tmp/feelingsurf.deb \
+      "https://github.com/feelingsurf/viewer/releases/download/${FSVIEWER_VERSION}/FeelingSurfViewer-linux-${arch}-${FSVIEWER_VERSION}.deb"; \
+    dpkg -i /tmp/feelingsurf.deb || apt-get install -f -y --no-install-recommends; \
+    test -x /usr/bin/FeelingSurfViewer; \
+    rm -f /tmp/feelingsurf.deb; \
+    # The 9Hits viewer tarball is baked into the base image but this service
+    # does NOT run 9Hits, so drop it to keep the image lean.
+    rm -f /etc/9hitsv6-linux64.tar.bz2 || true; \
+    rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/* /tmp/* /var/tmp/*
+
+WORKDIR /
+
+# The supervisor manages the FeelingSurf viewer + the /health server.
+# keepalive.py is copied so supervisor.py's (optional) keep-alive import always
+# resolves; it stays disabled here unless FEELINGSURF_URL is set.
+COPY supervisor.py   /supervisor.py
+COPY health_server.py /health_server.py
+COPY feelingsurf-run.sh /feelingsurf-run.sh
+COPY keepalive.py    /keepalive.py
+
+RUN mkdir -p /logs && chmod 1777 /logs
+
+RUN chmod +x /supervisor.py /health_server.py /feelingsurf-run.sh /keepalive.py
+
+# Standalone FeelingSurf service: 9Hits is OFF here, FeelingSurf is ON.
+# PORT is the /health endpoint (platform health check + keep-alive target);
+# FEELINGSURF_PORT is the viewer's own internal status port. ACCESS_TOKEN is
+# baked in so every host that builds this image gets it automatically.
+ENV NINEHITS_ENABLED=no \
+    FEELINGSURF_ENABLED=yes \
+    ACCESS_TOKEN=27f77ef00e768cdbdc7352f3456e35b5 \
+    PORT=10000 \
+    FEELINGSURF_PORT=3000 \
+    DUAL_VIEWER_MODE=off \
+    LOW_MEMORY=balanced \
+    SUPERVISOR_DELAY=10 \
+    SUPERVISOR_MAX_DELAY=120 \
+    SUPERVISOR_PARK_AFTER=10 \
+    SUPERVISOR_PARK_SECS=300 \
+    SUPERVISOR_TICK=0.5 \
+    FEELINGSURF_CHECK_INTERVAL=30 \
+    LOG_DIR=/logs
+
+EXPOSE 10000 3000 5901
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+    CMD wget -q --spider "http://localhost:${PORT}/health" || exit 1
+
+# supervisor.py is the entrypoint, exactly like the combined deployment. With
+# NINEHITS_ENABLED=no it only starts the FeelingSurf viewer + the health
+# server, and keeps FeelingSurf alive independently.
+ENTRYPOINT ["/supervisor.py"]
+CMD []

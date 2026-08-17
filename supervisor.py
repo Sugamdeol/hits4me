@@ -47,9 +47,8 @@ Design principles
   ``FS_MAX_MEMORY_MB`` (also accepted: ``NINEHITS_MAX_MEMORY_MB`` /
   ``FEELINGSURF_MAX_MEMORY_MB``) make the supervisor gracefully
   restart ONLY the offending slot when its process tree's RSS exceeds
-  the cap. This is independent of the total-RSS memguard.py - the
-  per-slot cap catches a single runaway viewer before the total RSS
-  trips the cgroup OOM.
+  the cap. The per-slot cap catches a single runaway viewer before the
+  total RSS trips the cgroup OOM.
 
 * **Per-slot health-check interval.** ``NINEHITS_CHECK_INTERVAL`` /
   ``FEELINGSURF_CHECK_INTERVAL`` (default 30 s) set the cadence at
@@ -106,11 +105,10 @@ Log rotation
 
 Paths (all already supported)
   LOG_DIR, HEALTH_SERVER_PATH, NINEHITS_LAUNCHER_PATH,
-  FEELINGSURF_LAUNCHER_PATH, MEMGUARD_PATH, SUPERVISOR_DISABLED
+  FEELINGSURF_LAUNCHER_PATH, SUPERVISOR_DISABLED
 
-All other env vars (DUAL_VIEWER_MODE, LOW_MEMORY, MEMGUARD_*, etc.) are
-honoured by the existing start.sh / memguard.py layer; the supervisor
-does not consume them.
+All other env vars (DUAL_VIEWER_MODE, LOW_MEMORY, etc.) are honoured by
+the existing start.sh layer; the supervisor does not consume them.
 """
 
 import errno
@@ -143,7 +141,6 @@ NINEHITS_LAUNCHER_PATH = os.environ.get("NINEHITS_LAUNCHER_PATH", "/start.sh")
 FEELINGSURF_LAUNCHER_PATH = os.environ.get(
     "FEELINGSURF_LAUNCHER_PATH", "/feelingsurf-run.sh"
 )
-MEMGUARD_PATH = os.environ.get("MEMGUARD_PATH", "/memguard.py")
 
 # Restart / backoff policy. Concrete numbers are read from the
 # environment below, after the helper functions are defined.
@@ -1219,17 +1216,14 @@ _FS_EXE_BASENAMES = ("FeelingSurfViewer", "chrome", "electron")
 
 
 def _build_slots() -> List[ManagedSlot]:
-    """Build the four managed slots.
+    """Build the managed slots.
 
     The launchers / commands mirror the proven bash logic so existing
     behaviour is preserved. 9Hits still goes through /start.sh because
-    that script does the Xvfb setup, the init pass, the wedge watchdog
-    and the time-slice turn-gating that memguard expects.
+    that script does the Xvfb setup, the init pass and the wedge watchdog.
     """
     nh_enabled = _env_bool("NINEHITS_ENABLED", False)
     fs_enabled = _env_bool("FEELINGSURF_ENABLED", True)
-    dual_mode = os.environ.get("DUAL_VIEWER_MODE", "auto").lower()
-    memguard_needed = (dual_mode != "off") and (nh_enabled and fs_enabled)
 
     nh_cpu = _env_int("NH_CPU_SHARES", 0) or None
     nh_mem = _env_int("NH_MEM_LIMIT_MB", 0) or None
@@ -1298,29 +1292,6 @@ def _build_slots() -> List[ManagedSlot]:
             description="FeelingSurf Viewer (disabled by FEELINGSURF_ENABLED)",
         ))
 
-    # --- memguard (optional) ---------------------------------------------
-    if memguard_needed:
-        slots.append(ManagedSlot(
-            name="memguard",
-            command=["python3", MEMGUARD_PATH],
-            enabled=True,
-            log_file=os.path.join(LOG_DIR, "memguard.log"),
-            env={"SUPERVISOR_MANAGED": "1"},
-            stop_grace=10.0,
-            check_interval=5,
-            description="Memory guardian + time-slice scheduler (dual-viewer RAM protection)",
-        ))
-    else:
-        slots.append(ManagedSlot(
-            name="memguard",
-            command=["/bin/true"],
-            enabled=False,
-            log_file=os.path.join(LOG_DIR, "memguard.log"),
-            stop_grace=1.0,
-            check_interval=5,
-            description="Memory guardian (disabled - DUAL_VIEWER_MODE=off or only one viewer)",
-        ))
-
     # --- health server ----------------------------------------------------
     slots.append(ManagedSlot(
         name="health",
@@ -1339,6 +1310,27 @@ def _build_slots() -> List[ManagedSlot]:
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
+
+
+def _start_keepalive_thread() -> None:
+    """Start the FeelingSurf keep-alive pinger in a background daemon thread.
+
+    This runs inside the 9Hits deployment so the existing service doubles as a
+    lightweight keep-alive client for the *separate* FeelingSurf deployment
+    (see keepalive.py). It is a daemon thread: it can never block, crash, or
+    restart the main supervisor, and it only runs when ``FEELINGSURF_URL`` is
+    configured. Any failure is caught and logged by keepalive.py - a
+    temporarily unreachable FeelingSurf service is ignored here.
+    """
+    try:
+        import keepalive  # local import so its absence can never break startup
+    except Exception as exc:  # pragma: no cover - defensive only
+        _self_log("[KeepAlive] could not load keepalive module: %s" % exc)
+        return
+    try:
+        keepalive.start_keepalive_thread()
+    except Exception as exc:  # pragma: no cover - defensive only
+        _self_log("[KeepAlive] could not start pinger: %s" % exc)
 
 
 def main() -> int:
@@ -1374,6 +1366,10 @@ def main() -> int:
         "starting (version=%s, log_dir=%s, slots=%s, tick=%.1fs)"
         % (SUPERVISOR_VERSION, LOG_DIR, ",".join(sup.slots.keys()), TICK_SECONDS)
     )
+    # Start the FeelingSurf keep-alive pinger (daemon thread, only when
+    # FEELINGSURF_URL is set). The supervisor and the 9Hits viewers start and
+    # run normally regardless of whether the FeelingSurf URL is reachable.
+    _start_keepalive_thread()
     return sup.run()
 
 
